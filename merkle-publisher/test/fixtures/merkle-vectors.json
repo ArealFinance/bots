@@ -1,0 +1,96 @@
+{
+  "note": "Golden merkle vectors — bot <-> contract byte-for-byte compat. Leaf = sha256(pubkey_bytes || u64_le). Parent = sha256(min || max).",
+  "cases": [
+    {
+      "claimant": "11111111111111111111111111111111",
+      "cumulativeAmount": "0",
+      "leafHex": "2c34ce1df23b838c5abf2a7f6437cca3d3067ed509ff25f11df6b11b582b51eb"
+    },
+    {
+      "claimant": "11111111111111111111111111111111",
+      "cumulativeAmount": "1",
+      "leafHex": "19ea44be89eece0fd4ec7482049f472a11af19384bffb38a88e77b3b1dd54c19"
+    },
+    {
+      "claimant": "2xNweLHLqrbx4zo1waDvgBHmLVqD24s1hFWtbwdqb5Eb",
+      "cumulativeAmount": "100000",
+      "leafHex": "9d0508a52841cfed4e8de3bf576745f3e79f452674c266b887d95c5e720238ec"
+    },
+    {
+      "claimant": "DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK",
+      "cumulativeAmount": "999999999",
+      "leafHex": "2c22a92030bd2ffed6803a47706d5c099befb1a68877c37747145214d5d9ff38"
+    },
+    {
+      "claimant": "So11111111111111111111111111111111111111112",
+      "cumulativeAmount": "18446744073709551615",
+      "leafHex": "1e1e100148af26fdd0d2f90507cff1898ef7488b3abd93865e254b27cf99075a"
+    }
+  ],
+  "trees": [
+    {
+      "description": "3-leaf (odd, duplicate-last)",
+      "entries": [
+        {
+          "claimant": "11111111111111111111111111111111",
+          "cumulativeAmount": "100"
+        },
+        {
+          "claimant": "2xNweLHLqrbx4zo1waDvgBHmLVqD24s1hFWtbwdqb5Eb",
+          "cumulativeAmount": "200"
+        },
+        {
+          "claimant": "DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK",
+          "cumulativeAmount": "300"
+        }
+      ],
+      "rootHex": "876fa31a7b2663576faef5d82ca91f5f7a0409aa9ffd3dff31e81fd632ccdc92",
+      "leafOrderHex": [
+        "84d636affd064535f01dfc1a7241c7bb6982face92afe91bfb5d0546e7e4945c",
+        "38ed8c1d0d57609f7db34276eed1f1155224d0ec8bd8a2f2a1a733fef0b60639",
+        "93d26660e9cd75b753fdfadea74ee731c6184889d436413719e6e7b5855751ab"
+      ]
+    },
+    {
+      "description": "4-leaf (power-of-two, balanced)",
+      "entries": [
+        {
+          "claimant": "11111111111111111111111111111111",
+          "cumulativeAmount": "1000"
+        },
+        {
+          "claimant": "So11111111111111111111111111111111111111112",
+          "cumulativeAmount": "4000"
+        },
+        {
+          "claimant": "2xNweLHLqrbx4zo1waDvgBHmLVqD24s1hFWtbwdqb5Eb",
+          "cumulativeAmount": "2000"
+        },
+        {
+          "claimant": "DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK",
+          "cumulativeAmount": "3000"
+        }
+      ],
+      "rootHex": "aede953f2606bcf8fa25fe3b7bf2c88839296581dfaf934f7b9b1e140023b649",
+      "leafOrderHex": [
+        "b6106efe5970fde23ebe7c82a5ce03c60369dbe04474d655f46ad379f26cba55",
+        "56a2ecbe453fda96b968af345bdc480844564eb4e37cf3915f6e4d62ca8c90bd",
+        "2a813714a34c5e4a9c312990b36ee9857e57c543337a2b5d166e5cc1f1e4408d",
+        "da0b8214199801ee219ab41ae9458d29078912b88a8de29fd1be8a9f51d5e4c0"
+      ]
+    },
+    {
+      "description": "1-leaf (root == leaf)",
+      "entries": [
+        {
+          "claimant": "DYw8jCTfwHNRJhhmFcbXvVDTqWMEVFBX6ZKUmG5CNSKK",
+          "cumulativeAmount": "42"
+        }
+      ],
+      "rootHex": "54289c3c82a24ac273ccf85b7312e0f46639d92be2195f844206388e47c7ea59",
+      "leafOrderHex": [
+        "54289c3c82a24ac273ccf85b7312e0f46639d92be2195f844206388e47c7ea59"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "name": "merkle-publisher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@aws-sdk/client-kms": "^3.1032.0",
+    "@google-cloud/kms": "^5.4.0",
+    "@solana/web3.js": "^1.95.0",
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.0",
+    "tweetnacl": "^1.0.3",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.11.0",
+    "fast-check": "^3.23.2",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.1.0"
+  }
+}
