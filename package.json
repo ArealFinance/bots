@@ -1,0 +1,20 @@
+{
+  "name": "areal-bots",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Off-chain services for the Areal Finance protocol",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ArealFinance/bots.git"
+  },
+  "workspaces": [
+    "merkle-publisher",
+    "pool-rebalancer"
+  ],
+  "scripts": {
+    "merkle:start": "npm -w merkle-publisher run start",
+    "merkle:test": "npm -w merkle-publisher test",
+    "rebalancer:start": "npm -w pool-rebalancer run start"
+  }
+}

@@ -1,0 +1,27 @@
+node_modules/
+dist/
+build/
+
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+*.log
+npm-debug.log*
+
+# Merkle Publisher runtime state
+merkle-publisher/data/
+merkle-publisher/proofs/
+merkle-publisher/local-mock-keypair.json
+merkle-publisher/*.db
+merkle-publisher/*.db-journal
+merkle-publisher/*.db-wal
+merkle-publisher/*.db-shm
