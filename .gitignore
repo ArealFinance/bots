@@ -44,3 +44,7 @@ yield-claim-crank/*.db
 yield-claim-crank/*.db-journal
 yield-claim-crank/*.db-wal
 yield-claim-crank/*.db-shm
+
+# Shared package build output
+shared/dist/
+shared/*.tsbuildinfo

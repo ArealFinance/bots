@@ -9,6 +9,7 @@
     "url": "https://github.com/ArealFinance/bots.git"
   },
   "workspaces": [
+    "shared",
     "merkle-publisher",
     "pool-rebalancer",
     "revenue-crank",
@@ -18,6 +19,8 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
+    "shared:build": "npm -w @areal/bots-shared run build",
+    "shared:test": "npm -w @areal/bots-shared test",
     "merkle:start": "npm -w merkle-publisher run start",
     "merkle:test": "npm -w merkle-publisher test",
     "rebalancer:start": "npm -w pool-rebalancer run start",

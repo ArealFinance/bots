@@ -1,0 +1,50 @@
+{
+  "name": "@areal/bots-shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared hardening primitives for Areal off-chain bots: multi-RPC fallback, single-instance lock, WS reconnect catch-up",
+  "license": "Apache-2.0",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./rpc-pool": {
+      "import": "./dist/rpc-pool.js",
+      "types": "./dist/rpc-pool.d.ts"
+    },
+    "./consensus": {
+      "import": "./dist/consensus.js",
+      "types": "./dist/consensus.d.ts"
+    },
+    "./lock": {
+      "import": "./dist/lock.js",
+      "types": "./dist/lock.d.ts"
+    },
+    "./reconcile": {
+      "import": "./dist/reconcile.js",
+      "types": "./dist/reconcile.d.ts"
+    },
+    "./logger": {
+      "import": "./dist/logger.js",
+      "types": "./dist/logger.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.95.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.1.0"
+  }
+}
