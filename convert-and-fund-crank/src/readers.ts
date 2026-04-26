@@ -60,30 +60,32 @@ export async function fetchTokenAmount(conn: Connection, ata: PublicKey): Promis
 /**
  * Parse RwtVault and extract `nav_book_value` (u64 LE).
  *
- * RwtVault layout (rwt-engine state.rs) keeps `nav_book_value` near the top
- * of the struct. We read it at a known offset from the discriminator.
+ * RwtVault layout (contracts/rwt-engine/src/state.rs, after 8-byte
+ * discriminator):
+ *   pub total_invested_capital: u128       // 0..16
+ *   pub total_rwt_supply:       u64        // 16..24
+ *   pub nav_book_value:         u64        // 24..32
+ *   pub capital_accumulator_ata:[u8;32]    // 32..64
+ *   pub rwt_mint:               [u8;32]    // 64..96
+ *   pub authority:              [u8;32]    // 96..128
+ *   pub pending_authority:      [u8;32]    // 128..160
+ *   pub has_pending:            bool       // 160..161
+ *   pub manager:                [u8;32]    // 161..193
+ *   pub pause_authority:        [u8;32]    // 193..225
+ *   pub mint_paused:            bool       // 225..226
+ *   pub areal_fee_destination:  [u8;32]    // 226..258
+ *   pub bump:                   u8         // 258..259
  *
- * NOTE: this offset is dependent on the RwtVault layout — if the contract
- * struct changes, the test in `slippage.test.ts` will not catch it; only an
- * E2E run will. The architecture flagged this as Step-10 follow-up.
+ * Total body = 259 bytes; SPACE = 8 + 259 = 267.
  *
- * Current layout (after 8-byte discriminator):
- *   pub authority: [u8;32]              // 0..32
- *   pub pending_authority: [u8;32]       // 32..64
- *   pub has_pending: bool                // 64
- *   pub vault_manager: [u8;32]           // 65..97
- *   pub capital_acc: [u8;32]             // 97..129
- *   pub dao_fee_account: [u8;32]         // 129..161
- *   pub total_invested_capital: u64      // 161..169
- *   pub total_rwt_supply: u64            // 169..177
- *   pub nav_book_value: u64              // 177..185
- *   ...
- *
- * If the layout above is wrong, the bot picks an unrealistic NAV and the
- * on-chain `min_rwt_out` slippage check will reject — failure is loud, not
- * silent.
+ * Pinned in unit tests (`readers.test.ts`) and re-asserted in the contract's
+ * `const _: () = assert!(core::mem::size_of::<RwtVault>() == 259)`. If the
+ * contract layout changes, both this reader and the dashboard's L-1 reader
+ * (`readRwtVault` in dashboard/lib/api/layer8.ts) must be updated together.
  */
-export const NAV_OFFSET_FROM_BODY = 177;
+export const NAV_OFFSET_FROM_BODY = 24;
+export const RWT_MINT_OFFSET_FROM_BODY = 64;
+export const RWT_VAULT_BODY_SIZE = 259;
 
 export async function fetchNav(conn: Connection, rwtVaultPda: PublicKey): Promise<bigint | null> {
   const info = await conn.getAccountInfo(rwtVaultPda, 'confirmed');
