@@ -1,0 +1,29 @@
+{
+  "name": "nexus-manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Manager-gated bot for the LiquidityNexus singleton: monitors state, decides rebalance actions, submits nexus_swap / nexus_add_liquidity / nexus_remove_liquidity TXs",
+  "license": "Apache-2.0",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@areal/bots-shared": "*",
+    "@solana/web3.js": "^1.95.0",
+    "better-sqlite3": "^11.3.0",
+    "dotenv": "^16.4.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.11",
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.1.0"
+  }
+}

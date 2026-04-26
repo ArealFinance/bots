@@ -14,7 +14,8 @@
     "pool-rebalancer",
     "revenue-crank",
     "convert-and-fund-crank",
-    "yield-claim-crank"
+    "yield-claim-crank",
+    "nexus-manager"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
@@ -29,6 +30,8 @@
     "convert:start": "npm -w convert-and-fund-crank run start",
     "convert:test": "npm -w convert-and-fund-crank test",
     "claim:start": "npm -w yield-claim-crank run start",
-    "claim:test": "npm -w yield-claim-crank test"
+    "claim:test": "npm -w yield-claim-crank test",
+    "nexus-manager:start": "npm -w nexus-manager run start",
+    "nexus-manager:test": "npm -w nexus-manager test"
   }
 }
