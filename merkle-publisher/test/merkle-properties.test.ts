@@ -11,7 +11,7 @@
  * env VITEST_SEED or is randomized. Set VITEST_SEED for exact reproduction
  * of a failure locally.
  *
- * @see plan/layer-07-review-tester.md §"Property-based / fuzz candidates"
+ * @see Layer 7 tester review §"Property-based / fuzz candidates"
  */
 import { describe, it, expect } from 'vitest';
 import fc from 'fast-check';
@@ -73,6 +73,7 @@ function toSnapshot(
     fundTs: 1_700_000_000 + epoch,
     txSignature: `prop-${distributor.slice(0, 6)}-${epoch}`,
     totalEligible,
+    eventKind: 'DistributorFunded',
     balances,
   };
 }

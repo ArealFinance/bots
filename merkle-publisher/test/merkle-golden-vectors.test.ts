@@ -10,7 +10,7 @@
  * change requires re-generation, the fixture MUST also be updated in the
  * Rust-side test (cross-language check) and this test MUST still pass.
  *
- * @see plan/layer-07-review-tester.md §"Missing Tests" C5
+ * @see Layer 7 tester review §"Missing Tests" C5
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';

@@ -18,7 +18,7 @@
  *   4. Self-verify fires before submit (verifyProof path is exercised by
  *      buildTree internally; we just assert submit still happens).
  *
- * @see plan/layer-07-review-tester.md §"Missing Tests" H2
+ * @see Layer 7 tester review §"Missing Tests" H2
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { createHash } from 'node:crypto';
@@ -169,6 +169,7 @@ function snap(distributor: string, depositEpoch: number, amount: bigint, holder:
     fundTs: 1_700_000_000 + depositEpoch,
     txSignature: `sig-${depositEpoch}`,
     totalEligible: 1000n,
+    eventKind: 'DistributorFunded',
     balances: [{ holder, balance: 1000n, eligible: 1 }],
   };
 }

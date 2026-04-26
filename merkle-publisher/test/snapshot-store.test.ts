@@ -7,7 +7,7 @@
  * store insists on creating a parent directory and opening via path). Each
  * test creates a unique file so they can run in parallel.
  *
- * @see plan/layer-07-review-tester.md §"Missing Tests" H1
+ * @see Layer 7 tester review §"Missing Tests" H1
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
@@ -39,6 +39,7 @@ function makeSnapshot(overrides: Partial<Snapshot> = {}): Snapshot {
     fundTs: 1_700_000_000,
     txSignature: 'sig-default',
     totalEligible: 500_000_000n,
+    eventKind: 'DistributorFunded',
     balances: [
       { holder: 'Holder11111111111111111111111111111111111', balance: 300_000_000n, eligible: 1 },
       { holder: 'Holder22222222222222222222222222222222222', balance: 200_000_000n, eligible: 1 },
@@ -222,6 +223,86 @@ describe('SnapshotStore', () => {
       // Right owner releases → next caller can acquire.
       store.releaseLeaderLock(1111, 'host-a');
       expect(store.tryAcquireLeaderLock(2222, 'host-b')).toBe(true);
+    });
+  });
+
+  describe('event_kind column (Layer 8 D12)', () => {
+    it('persists and reads back StreamConverted snapshots distinct from DistributorFunded', () => {
+      const dist = 'DKindMixed111111111111111111111111111111111';
+      store.saveSnapshot(
+        makeSnapshot({
+          distributor: dist,
+          depositEpoch: 0,
+          txSignature: 'kind-funded',
+          eventKind: 'DistributorFunded',
+        }),
+      );
+      store.saveSnapshot(
+        makeSnapshot({
+          distributor: dist,
+          depositEpoch: 1,
+          txSignature: 'kind-converted',
+          eventKind: 'StreamConverted',
+        }),
+      );
+      const all = store.getAllSnapshots(dist);
+      expect(all).toHaveLength(2);
+      const byEpoch = new Map(all.map(s => [s.depositEpoch, s.eventKind] as const));
+      expect(byEpoch.get(0)).toBe('DistributorFunded');
+      expect(byEpoch.get(1)).toBe('StreamConverted');
+    });
+
+    it('migration is idempotent — re-opening a fresh DB does not duplicate the column', () => {
+      // Fresh DB (already created by beforeEach above) — close and reopen.
+      // ALTER TABLE without IF NOT EXISTS guard would throw on second open;
+      // the migration's PRAGMA-based pre-check must prevent that.
+      store.close();
+      const reopened = new SnapshotStore(dbPath);
+      reopened.close();
+      const reopenedAgain = new SnapshotStore(dbPath);
+      reopenedAgain.close();
+      // Final reopen for cleanup symmetry — afterEach will close it.
+      store = new SnapshotStore(dbPath);
+    });
+
+    it('back-fills event_kind for legacy rows inserted before the column existed', () => {
+      // Simulate a pre-Layer-8 DB: drop the new column and re-insert a row
+      // through the raw SQL so the row has no event_kind value, then reopen
+      // and verify the migration re-adds the column with default.
+      store.close();
+      // Open the file directly with a constructor that mimics the old schema
+      // by manually dropping the column. SQLite < 3.35 does not support DROP
+      // COLUMN, but the version we ship with better-sqlite3 supports it.
+      const raw = new (require('better-sqlite3') as typeof import('better-sqlite3'))(dbPath);
+      try {
+        // Confirm the column exists post-fresh-init.
+        const cols = raw.prepare(`PRAGMA table_info(snapshots)`).all() as Array<{ name: string }>;
+        if (cols.some(c => c.name === 'event_kind')) {
+          raw.exec(`ALTER TABLE snapshots DROP COLUMN event_kind`);
+        }
+        // Insert a legacy-shape row.
+        raw.exec(`
+          INSERT INTO snapshots
+            (distributor, deposit_epoch, deposit_amount, slot, fund_ts,
+             tx_signature, total_eligible, total_funded_at_event)
+          VALUES ('LegacyDist111111111111111111111111111111111', 0, 100, 1, 1, 'legacy-sig', 100, 100)
+        `);
+      } finally {
+        raw.close();
+      }
+
+      // Reopen via the store — migration should add the column with default.
+      const reopened = new SnapshotStore(dbPath);
+      try {
+        const all = reopened.getAllSnapshots('LegacyDist111111111111111111111111111111111');
+        expect(all).toHaveLength(1);
+        // Back-filled to the pre-Layer-8 default.
+        expect(all[0]!.eventKind).toBe('DistributorFunded');
+      } finally {
+        reopened.close();
+      }
+      // Reopen the original `store` reference so afterEach can close cleanly.
+      store = new SnapshotStore(dbPath);
     });
   });
 

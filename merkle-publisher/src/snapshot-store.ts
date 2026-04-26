@@ -1,8 +1,29 @@
 import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { HolderBalance, PublishRecord, Snapshot } from './types.js';
+import type {
+  HolderBalance,
+  PublishRecord,
+  Snapshot,
+  SnapshotEventKind,
+} from './types.js';
 import { logger } from './logger.js';
+
+/**
+ * Raw shape of a row read from the `snapshots` table. Aligned with the
+ * column list used by `getUnpublishedSnapshots` / `getAllSnapshots`. Integer
+ * columns surface as `bigint` because `defaultSafeIntegers(true)` is enabled.
+ */
+interface SnapshotRow {
+  deposit_epoch: bigint;
+  deposit_amount: bigint;
+  slot: bigint;
+  fund_ts: bigint;
+  tx_signature: string;
+  total_eligible: bigint;
+  total_funded_at_event: bigint;
+  event_kind: string;
+}
 
 /**
  * SQLite-backed persistence for snapshots and publish history.
@@ -93,17 +114,31 @@ export class SnapshotStore {
       );
     `);
 
-    // Lightweight additive migration: add total_funded_at_event if missing.
-    // Layer 7 v2 introduced this column to track authoritative on-chain
-    // `total_funded` per fund event; older DBs may not have it.
+    // Lightweight additive migrations — all idempotent (check before add).
     const cols = this.db
       .prepare(`PRAGMA table_info(snapshots)`)
       .all() as Array<{ name: string }>;
-    if (!cols.some(c => c.name === 'total_funded_at_event')) {
+    const hasCol = (n: string) => cols.some(c => c.name === n);
+
+    // Layer 7 v2 introduced `total_funded_at_event` to track authoritative
+    // on-chain `total_funded` per fund event; older DBs may not have it.
+    if (!hasCol('total_funded_at_event')) {
       this.db.exec(
         `ALTER TABLE snapshots ADD COLUMN total_funded_at_event INTEGER NOT NULL DEFAULT 0`,
       );
       logger.info('SnapshotStore: added total_funded_at_event column');
+    }
+
+    // Layer 8 introduced `StreamConverted` as a distinct fund-event source
+    // (D12). We persist `event_kind` to disambiguate snapshot rows for
+    // analytics / dashboards and to keep an audit trail of which on-chain ix
+    // sourced each per-deposit row. Older snapshots default to
+    // `'DistributorFunded'` since that was the only source pre-Layer-8.
+    if (!hasCol('event_kind')) {
+      this.db.exec(
+        `ALTER TABLE snapshots ADD COLUMN event_kind TEXT NOT NULL DEFAULT 'DistributorFunded'`,
+      );
+      logger.info('SnapshotStore: added event_kind column');
     }
   }
 
@@ -130,8 +165,8 @@ export class SnapshotStore {
     const insertSnap = this.db.prepare(`
       INSERT INTO snapshots
         (distributor, deposit_epoch, deposit_amount, slot, fund_ts,
-         tx_signature, total_eligible, total_funded_at_event)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         tx_signature, total_eligible, total_funded_at_event, event_kind)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const insertBal = this.db.prepare(`
       INSERT INTO snapshot_balances
@@ -149,6 +184,7 @@ export class SnapshotStore {
         s.txSignature,
         s.totalEligible,
         s.totalFundedAtEvent,
+        s.eventKind,
       );
       for (const b of s.balances) {
         insertBal.run(s.distributor, s.depositEpoch, b.holder, b.balance, b.eligible);
@@ -162,32 +198,14 @@ export class SnapshotStore {
     const rows = this.db
       .prepare(
         `SELECT deposit_epoch, deposit_amount, slot, fund_ts, tx_signature,
-                total_eligible, total_funded_at_event
+                total_eligible, total_funded_at_event, event_kind
          FROM snapshots
          WHERE distributor = ? AND published_epoch IS NULL
          ORDER BY deposit_epoch ASC`,
       )
-      .all(distributor) as Array<{
-      deposit_epoch: bigint;
-      deposit_amount: bigint;
-      slot: bigint;
-      fund_ts: bigint;
-      tx_signature: string;
-      total_eligible: bigint;
-      total_funded_at_event: bigint;
-    }>;
+      .all(distributor) as Array<SnapshotRow>;
 
-    return rows.map(r => ({
-      distributor,
-      depositEpoch: Number(r.deposit_epoch),
-      depositAmount: r.deposit_amount,
-      totalFundedAtEvent: r.total_funded_at_event,
-      slot: Number(r.slot),
-      fundTs: Number(r.fund_ts),
-      txSignature: r.tx_signature,
-      totalEligible: r.total_eligible,
-      balances: this.getBalances(distributor, Number(r.deposit_epoch)),
-    }));
+    return rows.map(r => this.rowToSnapshot(distributor, r));
   }
 
   /** Returns all snapshots (published + unpublished) for a distributor. */
@@ -195,22 +213,18 @@ export class SnapshotStore {
     const rows = this.db
       .prepare(
         `SELECT deposit_epoch, deposit_amount, slot, fund_ts, tx_signature,
-                total_eligible, total_funded_at_event
+                total_eligible, total_funded_at_event, event_kind
          FROM snapshots
          WHERE distributor = ?
          ORDER BY deposit_epoch ASC`,
       )
-      .all(distributor) as Array<{
-      deposit_epoch: bigint;
-      deposit_amount: bigint;
-      slot: bigint;
-      fund_ts: bigint;
-      tx_signature: string;
-      total_eligible: bigint;
-      total_funded_at_event: bigint;
-    }>;
+      .all(distributor) as Array<SnapshotRow>;
 
-    return rows.map(r => ({
+    return rows.map(r => this.rowToSnapshot(distributor, r));
+  }
+
+  private rowToSnapshot(distributor: string, r: SnapshotRow): Snapshot {
+    return {
       distributor,
       depositEpoch: Number(r.deposit_epoch),
       depositAmount: r.deposit_amount,
@@ -219,8 +233,12 @@ export class SnapshotStore {
       fundTs: Number(r.fund_ts),
       txSignature: r.tx_signature,
       totalEligible: r.total_eligible,
+      // Defensive: r.event_kind comes from a TEXT column with a DEFAULT of
+      // 'DistributorFunded'; the type assertion mirrors the SnapshotEventKind
+      // union — anything outside it indicates a corrupted DB.
+      eventKind: r.event_kind as SnapshotEventKind,
       balances: this.getBalances(distributor, Number(r.deposit_epoch)),
-    }));
+    };
   }
 
   private getBalances(distributor: string, depositEpoch: number): HolderBalance[] {

@@ -9,7 +9,7 @@
  * by stubbing `fs.renameSync` to throw AFTER a successful `writeFileSync` —
  * then verify the real file does not exist.
  *
- * @see plan/layer-07-review-tester.md §"Missing Tests" H4
+ * @see Layer 7 tester review §"Missing Tests" H4
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';

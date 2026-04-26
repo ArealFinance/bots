@@ -29,6 +29,7 @@ function snap(
     fundTs: 1_700_000_000 + depositEpoch,
     txSignature: `sig-${distributor}-${depositEpoch}`,
     totalEligible,
+    eventKind: 'DistributorFunded',
     balances: balances.map(b => ({ holder: b.holder, balance: b.balance, eligible: b.eligible ?? 1 })),
   };
 }

@@ -16,13 +16,19 @@ import { logger } from './logger.js';
  *
  * Payload = disc (8 bytes) || borsh-encoded struct body.
  *
- * The event body layout matches architecture §4.4:
- *   DistributorFunded { ot_mint: [u8;32], amount: u64, fee: u64, total_funded: u64,
- *                       locked_vested: u64, timestamp: i64 }
- *   StreamConverted (Layer 8) shares the same first 3 fields (ot_mint + amount + ...).
+ * Two distinct event sources are handled (per Layer 8 D12):
+ *   - `DistributorFunded` (Layer 7): emitted by `fund_distributor`. Body
+ *     layout in `parseFundEventBody` below (72 bytes, `ot_mint` at offset 0).
+ *   - `StreamConverted` (Layer 8): emitted by `convert_to_rwt`. Body layout
+ *     in `parseStreamConvertedBody` (128 bytes, prepends a 32-byte
+ *     `distributor` PDA + appends 3 convert-only fields). Uses a dedicated
+ *     parser — feeding its body through `parseFundEventBody` would silently
+ *     mis-account because offsets are shifted by +32.
  *
  * On reconnect, `reconcile()` scans tx signatures since the last processed slot
- * via `getSignaturesForAddress` and re-plays any missed fund events.
+ * via `getSignaturesForAddress` and re-plays any missed fund events. Both live
+ * and reconcile paths share `decodeProgramDataLine` so the dispatch logic is
+ * identical between them.
  */
 
 const DISCRIMINATOR_PREFIX = 'event:';
@@ -74,42 +80,13 @@ export class EventWatcher {
 
         try {
           for (const line of logs.logs) {
-            if (!line.startsWith('Program data: ')) continue;
-            const b64 = line.slice('Program data: '.length);
-            const bytes = Buffer.from(b64, 'base64');
-            if (bytes.length < 8) continue;
-
-            const disc = bytes.subarray(0, 8);
-            const body = bytes.subarray(8);
-
-            let kind: 'DistributorFunded' | 'StreamConverted' | null = null;
-            if (disc.equals(DISC_DISTRIBUTOR_FUNDED)) kind = 'DistributorFunded';
-            else if (disc.equals(DISC_STREAM_CONVERTED)) kind = 'StreamConverted';
-            if (!kind) continue;
-
-            const parsed = parseFundEventBody(body);
-            if (!parsed) continue;
-
-            // Re-derive distributor PDA from ot_mint. Match the on-chain seed
-            // (see architecture §2.2: [b"merkle_dist", ot_mint.as_ref()]).
-            const [distributor] = PublicKey.findProgramAddressSync(
-              [Buffer.from('merkle_dist'), parsed.otMint.toBuffer()],
+            const event = decodeProgramDataLine(
+              line,
+              ctx.slot,
+              logs.signature,
               this.programId,
             );
-
-            const event: FundEvent = {
-              distributor,
-              otMint: parsed.otMint,
-              grossAmount: parsed.grossAmount,
-              protocolFee: parsed.protocolFee,
-              netAmount: parsed.netAmount,
-              totalFunded: parsed.totalFunded,
-              lockedVested: parsed.lockedVested,
-              slot: ctx.slot,
-              signature: logs.signature,
-              fundTs: parsed.timestamp,
-            };
-
+            if (!event) continue;
             await this.onFund(event);
           }
         } catch (err) {
@@ -210,38 +187,9 @@ export class EventWatcher {
       if (!tx?.meta?.logMessages) continue;
 
       for (const line of tx.meta.logMessages) {
-        if (!line.startsWith('Program data: ')) continue;
-        const b64 = line.slice('Program data: '.length);
-        const bytes = Buffer.from(b64, 'base64');
-        if (bytes.length < 8) continue;
-
-        const disc = bytes.subarray(0, 8);
-        const body = bytes.subarray(8);
-
-        let kind: 'DistributorFunded' | 'StreamConverted' | null = null;
-        if (disc.equals(DISC_DISTRIBUTOR_FUNDED)) kind = 'DistributorFunded';
-        else if (disc.equals(DISC_STREAM_CONVERTED)) kind = 'StreamConverted';
-        if (!kind) continue;
-
-        const parsed = parseFundEventBody(body);
-        if (!parsed) continue;
-
-        const [distributor] = PublicKey.findProgramAddressSync(
-          [Buffer.from('merkle_dist'), parsed.otMint.toBuffer()],
-          this.programId,
-        );
-        events.push({
-          distributor,
-          otMint: parsed.otMint,
-          grossAmount: parsed.grossAmount,
-          protocolFee: parsed.protocolFee,
-          netAmount: parsed.netAmount,
-          totalFunded: parsed.totalFunded,
-          lockedVested: parsed.lockedVested,
-          slot,
-          signature,
-          fundTs: parsed.timestamp,
-        });
+        const event = decodeProgramDataLine(line, slot, signature, this.programId);
+        if (!event) continue;
+        events.push(event);
         this.processed.add(signature);
       }
     }
@@ -269,13 +217,14 @@ export class EventWatcher {
  *
  * NOTE: the Areal spec calls the fee field `protocol_fee`; the current contract
  * emits a field named `fee` (byte layout identical). We preserve the semantic
- * name `protocolFee` here — see `plan/layer-07-review-architect.md` MED-1.
+ * name `protocolFee` here — see `Layer 7 architect review` MED-1.
  *
- * `StreamConverted` (Layer 8) does NOT share this layout — its second field is
- * `usdc_swapped`, not `amount`, and the conflation of units would cause silent
- * mis-accounting (see `layer-07-review-architect.md` MED-3). The caller must
- * NOT route StreamConverted discriminator bodies through this parser without
- * a Layer 8 dedicated parser.
+ * `StreamConverted` (Layer 8) does NOT share this layout — its first field is a
+ * 32-byte `distributor` prefix, shifting every offset by +32 (D12). It is parsed
+ * by the dedicated `parseStreamConvertedBody` below. Routing a `StreamConverted`
+ * body through this parser would mis-read `distributor` bytes as the OT mint and
+ * the OT mint bytes as `amount`, silently corrupting snapshot accounting. See
+ * `Layer 7 architect review` MED-3 / `Layer 8 decisions` D12.
  */
 interface ParsedFundBody {
   otMint: PublicKey;
@@ -287,7 +236,7 @@ interface ParsedFundBody {
   timestamp: number;
 }
 
-function parseFundEventBody(body: Buffer): ParsedFundBody | null {
+export function parseFundEventBody(body: Buffer): ParsedFundBody | null {
   // Required: 32 (otMint) + 8 (amount) + 8 (protocol_fee) + 8 (total_funded) + 8 (locked_vested) + 8 (ts) = 72
   if (body.length < 72) return null;
 
@@ -305,4 +254,148 @@ function parseFundEventBody(body: Buffer): ParsedFundBody | null {
   const netAmount = grossAmount - protocolFee;
 
   return { otMint, grossAmount, protocolFee, netAmount, totalFunded, lockedVested, timestamp };
+}
+
+/**
+ * Parse the `StreamConverted` event body emitted by Layer 8 `convert_to_rwt`.
+ *
+ * Layout (128-byte body — see Layer 8 architecture §6.1 / decisions D12):
+ *
+ *   offset 0..32    distributor    [u8; 32]   — Distributor PDA (NEW vs DistributorFunded)
+ *   offset 32..64   ot_mint        [u8; 32]
+ *   offset 64..72   amount         u64 (LE)   — NET RWT funded this TX (D2: NOT cumulative)
+ *   offset 72..80   protocol_fee   u64 (LE)   — RWT fee taken at outer level
+ *   offset 80..88   total_funded   u64 (LE)   — distributor.total_funded AFTER update
+ *   offset 88..96   locked_vested  u64 (LE)   — distributor.locked_vested AFTER update
+ *   offset 96..104  timestamp      i64 (LE)
+ *   offset 104..112 usdc_in        u64 (LE)   — USDC consumed across both legs
+ *   offset 112..120 swap_out_rwt   u64 (LE)   — RWT acquired via DEX swap
+ *   offset 120..128 mint_out_rwt   u64 (LE)   — RWT acquired via RWT Engine mint
+ *
+ * D2: `amount` is the **net** result of the conversion (= rwt_acquired −
+ * protocol_fee, computed on-chain). Unlike `DistributorFunded.amount` which is
+ * gross, `StreamConverted.amount` is already net — so for snapshot aggregation
+ * we treat it as the per-deposit `netAmount` directly. A `grossAmount` value is
+ * synthesised as `netAmount + protocolFee` purely so the
+ * `BaseFundEvent` shape stays uniform across kinds (downstream consumers must
+ * not rely on `grossAmount` for `StreamConverted` accounting).
+ */
+interface ParsedStreamConvertedBody {
+  distributor: PublicKey;
+  otMint: PublicKey;
+  netAmount: bigint;
+  protocolFee: bigint;
+  totalFunded: bigint;
+  lockedVested: bigint;
+  timestamp: number;
+  usdcIn: bigint;
+  swapOutRwt: bigint;
+  mintOutRwt: bigint;
+}
+
+export function parseStreamConvertedBody(body: Buffer): ParsedStreamConvertedBody | null {
+  // Required: 32+32 (PDAs) + 4×u64 + i64 + 3×u64 = 64 + 32 + 8 + 24 = 128
+  if (body.length < 128) return null;
+
+  const distributor = new PublicKey(body.subarray(0, 32));
+  const otMint = new PublicKey(body.subarray(32, 64));
+  const netAmount = body.readBigUInt64LE(64);
+  const protocolFee = body.readBigUInt64LE(72);
+  const totalFunded = body.readBigUInt64LE(80);
+  const lockedVested = body.readBigUInt64LE(88);
+  const timestamp = Number(body.readBigInt64LE(96));
+  const usdcIn = body.readBigUInt64LE(104);
+  const swapOutRwt = body.readBigUInt64LE(112);
+  const mintOutRwt = body.readBigUInt64LE(120);
+
+  return {
+    distributor,
+    otMint,
+    netAmount,
+    protocolFee,
+    totalFunded,
+    lockedVested,
+    timestamp,
+    usdcIn,
+    swapOutRwt,
+    mintOutRwt,
+  };
+}
+
+/**
+ * Decode a single Solana log line into a `FundEvent`, or return `null` if the
+ * line is not a fund-event payload. Centralises the dispatch logic shared
+ * between the live `onLogs` subscription and the historical `reconcileRange`
+ * replay so both paths stay byte-for-byte identical.
+ *
+ * Returns `null` for: non-`Program data:` lines, payloads shorter than the
+ * 8-byte discriminator, unknown discriminators, and malformed bodies.
+ */
+function decodeProgramDataLine(
+  line: string,
+  slot: number,
+  signature: string,
+  programId: PublicKey,
+): FundEvent | null {
+  if (!line.startsWith('Program data: ')) return null;
+  const b64 = line.slice('Program data: '.length);
+  const bytes = Buffer.from(b64, 'base64');
+  if (bytes.length < 8) return null;
+
+  const disc = bytes.subarray(0, 8);
+  const body = bytes.subarray(8);
+
+  if (disc.equals(DISC_DISTRIBUTOR_FUNDED)) {
+    const parsed = parseFundEventBody(body);
+    if (!parsed) return null;
+    // Re-derive distributor PDA from ot_mint. Match the on-chain seed
+    // (architecture §2.2: [b"merkle_dist", ot_mint.as_ref()]).
+    const [distributor] = PublicKey.findProgramAddressSync(
+      [Buffer.from('merkle_dist'), parsed.otMint.toBuffer()],
+      programId,
+    );
+    return {
+      kind: 'DistributorFunded',
+      distributor,
+      otMint: parsed.otMint,
+      grossAmount: parsed.grossAmount,
+      protocolFee: parsed.protocolFee,
+      netAmount: parsed.netAmount,
+      totalFunded: parsed.totalFunded,
+      lockedVested: parsed.lockedVested,
+      slot,
+      signature,
+      fundTs: parsed.timestamp,
+    };
+  }
+
+  if (disc.equals(DISC_STREAM_CONVERTED)) {
+    const parsed = parseStreamConvertedBody(body);
+    if (!parsed) return null;
+    // The on-chain event already carries the distributor PDA — no re-derivation
+    // needed (and notably, fragile: the on-chain PDA was created against this
+    // program's seeds and authority, so we trust it directly per D12).
+    return {
+      kind: 'StreamConverted',
+      distributor: parsed.distributor,
+      otMint: parsed.otMint,
+      // For convert events, on-chain `amount` is already net (D2). We
+      // synthesise grossAmount = net + fee purely to satisfy BaseFundEvent;
+      // downstream aggregation uses netAmount directly.
+      grossAmount: parsed.netAmount + parsed.protocolFee,
+      protocolFee: parsed.protocolFee,
+      netAmount: parsed.netAmount,
+      totalFunded: parsed.totalFunded,
+      lockedVested: parsed.lockedVested,
+      slot,
+      signature,
+      fundTs: parsed.timestamp,
+      usdcIn: parsed.usdcIn,
+      swapOutRwt: parsed.swapOutRwt,
+      mintOutRwt: parsed.mintOutRwt,
+    };
+  }
+
+  // Unknown discriminator — skip silently (other program events).
+  return null;
 }

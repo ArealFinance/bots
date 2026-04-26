@@ -79,8 +79,14 @@ export class SnapshotTaker {
     const snapshot: Snapshot = {
       distributor: distributorKey,
       depositEpoch: this.store.nextEpoch(distributorKey),
+      // D2: for both event kinds, `event.netAmount` is the per-deposit amount
+      // applied to `MerkleDistributor.total_funded` on-chain. For
+      // DistributorFunded it is derived (gross − fee); for StreamConverted it
+      // is emitted directly by `convert_to_rwt`. No kind-specific branching
+      // in the share math — the on-chain ix already settled the bookkeeping.
       depositAmount: event.netAmount,
       totalFundedAtEvent: event.totalFunded,
+      eventKind: event.kind,
       slot: event.slot,
       fundTs: event.fundTs,
       txSignature: event.signature,
@@ -92,6 +98,7 @@ export class SnapshotTaker {
     logger.info('snapshot saved', {
       distributor: distributorKey,
       epoch: snapshot.depositEpoch,
+      eventKind: event.kind,
       holders: balances.length,
       eligibleHolders: balances.filter(b => b.eligible === 1).length,
       totalEligible,
@@ -99,6 +106,14 @@ export class SnapshotTaker {
       totalFundedAtEvent: event.totalFunded,
       grossAmount: event.grossAmount,
       protocolFee: event.protocolFee,
+      // Convert-only metadata for analytics; absent for DistributorFunded.
+      ...(event.kind === 'StreamConverted'
+        ? {
+            usdcIn: event.usdcIn,
+            swapOutRwt: event.swapOutRwt,
+            mintOutRwt: event.mintOutRwt,
+          }
+        : {}),
     });
 
     return snapshot;
