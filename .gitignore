@@ -25,3 +25,22 @@ merkle-publisher/*.db
 merkle-publisher/*.db-journal
 merkle-publisher/*.db-wal
 merkle-publisher/*.db-shm
+
+# Layer 8 cranks runtime state (D9 SQLite checkpoints + crank keypairs)
+revenue-crank/data/
+revenue-crank/*.db
+revenue-crank/*.db-journal
+revenue-crank/*.db-wal
+revenue-crank/*.db-shm
+
+convert-and-fund-crank/data/
+convert-and-fund-crank/*.db
+convert-and-fund-crank/*.db-journal
+convert-and-fund-crank/*.db-wal
+convert-and-fund-crank/*.db-shm
+
+yield-claim-crank/data/
+yield-claim-crank/*.db
+yield-claim-crank/*.db-journal
+yield-claim-crank/*.db-wal
+yield-claim-crank/*.db-shm

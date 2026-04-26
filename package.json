@@ -10,11 +10,22 @@
   },
   "workspaces": [
     "merkle-publisher",
-    "pool-rebalancer"
+    "pool-rebalancer",
+    "revenue-crank",
+    "convert-and-fund-crank",
+    "yield-claim-crank"
   ],
   "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
     "merkle:start": "npm -w merkle-publisher run start",
     "merkle:test": "npm -w merkle-publisher test",
-    "rebalancer:start": "npm -w pool-rebalancer run start"
+    "rebalancer:start": "npm -w pool-rebalancer run start",
+    "revenue:start": "npm -w revenue-crank run start",
+    "revenue:test": "npm -w revenue-crank test",
+    "convert:start": "npm -w convert-and-fund-crank run start",
+    "convert:test": "npm -w convert-and-fund-crank test",
+    "claim:start": "npm -w yield-claim-crank run start",
+    "claim:test": "npm -w yield-claim-crank test"
   }
 }
