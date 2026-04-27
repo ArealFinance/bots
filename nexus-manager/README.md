@@ -52,6 +52,38 @@ costs one Authority TX (`update_nexus_manager`).
    npm -w nexus-manager run start
    ```
 
+## Layer 9 hardening (R29-R31, R-60)
+
+The bot inherits all four `@areal/bots-shared` primitives:
+
+- **MultiRpcClient (R29)** — every read + every submit goes through
+  `withFallback`; security-critical reads (Nexus principal floor before a
+  swap, pool reserves before an LP add) use `consensusRead`.
+- **SingleInstanceLock (R30)** — see "Single-Instance Guarantee" below.
+- **reconcileEvents (R31)** — startup + WS reconnect walk replays
+  `NexusDeposited` / `NexusManagerUpdated` / `NexusProfitsWithdrawn` since
+  the last-seen slot from the SQLite checkpoint.
+- **assertCrankBalance (R-60)** — first thing per cycle; if the manager
+  wallet is below 0.05 SOL (override via `NEXUS_MANAGER_MIN_SOL_LAMPORTS`),
+  the cycle returns `{ kind: 'skip', reason: 'low_sol' }` cleanly rather
+  than failing inside `sendAndConfirmTransaction`.
+
+## SEND_TX flag (D22 dry-run gate)
+
+The bot reads `SEND_TX` from the env. Defaults to `false` — the
+decision-engine output is identical, but the final
+`sendAndConfirmTransaction` call is suppressed and the action is logged as
+`decision: "would_submit", dryRun: true`. Operators flip to `true` after
+staging verification.
+
+Same flip procedure as the other cranks:
+
+1. `SEND_TX=false` cycle, confirm decisions look right in the JSONL log.
+2. Verify the SOL pre-flight does not skip.
+3. Confirm the manager keypair is loaded (look for `manager_pubkey: ...`
+   on startup, matching `LiquidityNexus.manager` on-chain).
+4. `SEND_TX=true`, restart, watch the first live cycle.
+
 ## Decision Policy (V1)
 
 Per Layer 9 architecture §5.1.2, one decision per cycle, evaluated in this

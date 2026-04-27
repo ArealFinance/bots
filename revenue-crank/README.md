@@ -123,6 +123,25 @@ Edit `revenue-crank/.env`:
 - `OT_PROGRAM_ID` — already pinned to the vanity OT program ID.
 - `OT_PROJECTS` — comma-separated OT mint addresses to monitor.
 - `CHECK_INTERVAL_SECS` — poll fallback cadence (default 3600).
+- `SEND_TX` — `false` (default) for dry-run mode (compute + log decisions but
+  do not submit). Flip to `true` only after staging verification. The
+  decision-engine output is identical in both modes; only the final
+  `sendAndConfirmTransaction` call is suppressed when `SEND_TX=false`.
+- `REVENUE_MIN_SOL_LAMPORTS` — optional override for the R-60 SOL pre-flight
+  threshold (default 0.05 SOL = 50_000_000 lamports). Set higher for
+  mainnet priority-fee bursts, e.g. `REVENUE_MIN_SOL_LAMPORTS=100000000`.
+
+### SEND_TX flip procedure
+
+1. Run with `SEND_TX=false` for at least one full cycle in staging.
+2. Inspect the JSONL decision log under `data/decisions-*.log` — confirm
+   the engine selects expected OT projects and skips for the right reasons.
+3. Verify the SOL pre-flight does not log `low_sol` skips for the crank
+   wallet (top up via airdrop or transfer if it does).
+4. Edit `.env`: `SEND_TX=true`. Restart the systemd unit (or `npm run start`).
+5. Tail the decision log; the first live cycle should produce one or more
+   `decision: "submitted", signature: "..."` entries. If anything else
+   surfaces, flip back to `false` and inspect.
 
 ## Run
 

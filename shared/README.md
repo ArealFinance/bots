@@ -13,6 +13,9 @@ post-WS-disconnect catch-up — behind a small, dependency-light API.
 | `lock` | PID-file based single-instance guard | `SingleInstanceLock` |
 | `reconcile` | Walk program signatures since last-seen slot | `reconcileEvents` |
 | `logger` | Drop-in structured logger compatible with the cranks | `logger`, `setLogLevel` |
+| `env` | `RPC_URLS` env parser | `parseRpcEndpoints` |
+| `preflight` | SOL pre-flight check before submit | `assertCrankBalance`, `resolveMinLamportsFromEnv` |
+| `signals` | Lifecycle signal handler installer | `installSignalHandlers` |
 
 Only depends on `@solana/web3.js` and the Node standard library.
 
@@ -138,6 +141,74 @@ checkpoint check above is cheaper.
 
 The walker stops at strict `slot < fromSlot` (NOT `<=`) so sibling events on
 the same slot are not skipped.
+
+### `assertCrankBalance()` — SOL pre-flight (R-60)
+
+Routes a `getBalance` read through `MultiRpcClient.withFallback` and returns
+a structured decision (`{ kind: 'ok' }` or `{ kind: 'skip', reason: 'low_sol' }`)
+that callers MUST honour before the first submit per cycle. Default threshold
+is 0.05 SOL; per-crank overrides via `<CRANK>_MIN_SOL_LAMPORTS` env.
+
+Fail-closed semantics: a non-finite balance reading (e.g. NaN from a
+misbehaving custom RPC) is treated as `low_sol` rather than allowing
+submit on an unverified balance (sec M-1).
+
+```ts
+import {
+  assertCrankBalance,
+  resolveMinLamportsFromEnv,
+} from '@areal/bots-shared';
+
+const minLamports = resolveMinLamportsFromEnv('REVENUE'); // REVENUE_MIN_SOL_LAMPORTS
+const decision = await assertCrankBalance(rpcs, crankPubkey, minLamports);
+
+if (decision.kind === 'skip') {
+  logger.warn(`crank wallet underfunded: ${decision.balance} < ${decision.required}`);
+  return; // skip the cycle, do not submit
+}
+// proceed: balance >= required
+```
+
+### `parseRpcEndpoints()` — `RPC_URLS` parser
+
+Parses the `RPC_URLS` env value into the structured shape `MultiRpcClient`
+expects. Handles three variants per entry: `url`, `url|wsUrl`, and
+`url|wsUrl|weight`. Whitespace is trimmed; empty entries are dropped.
+
+```ts
+import { parseRpcEndpoints, MultiRpcClient } from '@areal/bots-shared';
+
+const rpcs = new MultiRpcClient(parseRpcEndpoints(process.env.RPC_URLS!));
+```
+
+Equivalent input formats (all valid):
+
+```bash
+RPC_URLS=https://primary.rpc
+RPC_URLS=https://primary.rpc|wss://primary.rpc
+RPC_URLS=https://primary.rpc|wss://primary.rpc|100,https://secondary.rpc|wss://secondary.rpc|50
+```
+
+### `installSignalHandlers()` — lifecycle wiring
+
+Wires SIGINT, SIGTERM, `uncaughtException`, and `unhandledRejection` to a
+single shutdown callback. Each handler fires at most once per signal
+(`process.once`); callers retain their own `alreadyShuttingDown` guard for
+cleanup idempotency.
+
+Exit-code contract: signals exit `0`; `uncaughtException` and
+`unhandledRejection` exit `1` (after logging the offending error).
+
+```ts
+import { installSignalHandlers } from '@areal/bots-shared';
+
+installSignalHandlers(async (signal, exitCode = 0) => {
+  logger.info(`shutting down on ${signal}`);
+  await checkpoint.close();
+  await lock.release();
+  process.exit(exitCode);
+});
+```
 
 ## Migration guide for existing cranks
 

@@ -137,6 +137,32 @@ Edit `.env` — fill `OT_PROJECTS`, `OT_RWT_POOLS`, `ARL_OT_MINT`, `RWT_MINT`,
 and choose a proof source: either `PROOF_DIR` (shared filesystem with the
 publisher) or `PROOF_BASE_URL` (HTTP).
 
+### Layer 9 env vars
+
+- `SEND_TX` — `false` (default) for dry-run mode. Same flip procedure as
+  the other cranks: verify in staging, top up wallet, flip to `true`,
+  watch the decision log.
+- `YIELD_CLAIM_MIN_SOL_LAMPORTS` — R-60 SOL pre-flight threshold override.
+
+**Layer 9 opt-in flows (default OFF):**
+
+- `YIELD_CLAIM_ENABLE_LH_DRAIN` — gate for the LiquidityHolding → Nexus
+  drain via `withdraw_liquidity_holding`. **Blocked on R20** (RWT_MINT pin
+  migration). Until R20 lands, opting in + `SEND_TX=true` produces a
+  `decision: "send", reason: "deferred"` log line and skips the cycle
+  cleanly. The TX-builder for `withdraw_liquidity_holding` is intentionally
+  not exported from this crank — the Authority-side flow lives in the
+  dashboard. Per SD-29 / R-61.
+- `YIELD_CLAIM_ENABLE_NEXUS_DEPOSIT` — gate for the USDC `nexus_deposit`
+  routing after `distribute_revenue`. Blocked on nexus-manager publishing
+  a shared TX-builder. Same dry-run-with-deferred-skip pattern. Per SD-29.
+
+Both opt-ins default to `false`. When enabled (`true`) but `SEND_TX=false`,
+the crank logs the intent without submitting. When both are `true` AND the
+external dependency is satisfied, the crank submits live. Because of the
+external gates, **flipping the opt-in to `true` ahead of R20 is safe** —
+the crank will never accidentally submit; it will deferred-skip.
+
 ## Run / test / build
 
 ```bash

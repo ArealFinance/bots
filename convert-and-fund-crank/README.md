@@ -148,6 +148,27 @@ solana-keygen new -o convert-and-fund-crank/data/convert-fund-crank.json --no-bi
 
 Edit `.env` — fill `USDC_MINT`, `RWT_MINT`, `RWT_USDC_POOL`, and `OT_PROJECTS`.
 
+Layer 9 env additions:
+
+- `SEND_TX` — `false` (default) keeps the crank in dry-run mode (compute +
+  log only). Flip to `true` after staging verification. The
+  `convert_to_rwt` decision and TX-builder output are identical in both
+  modes — only the final submit is suppressed.
+- `CONVERT_MIN_SOL_LAMPORTS` — R-60 SOL pre-flight threshold override. The
+  helper falls through to 0.05 SOL on missing / invalid values.
+
+### SEND_TX flip procedure
+
+1. Run with `SEND_TX=false` for one or more cycles. Confirm
+   `decision: "convert", route: "swap" | "mint" | "split"` lines appear with
+   sane sizes.
+2. Spot-check the constructed TX byte layout against
+   `bots/.e2e/parity-tx-builders.test.ts` — the test pins crank-side ↔
+   dashboard-side equivalence (R-59 / SD-34).
+3. Top up the crank wallet so the SOL pre-flight does not skip the cycle.
+4. `SEND_TX=true` in `.env`, restart, tail the decision log for
+   `submitted, signature: ...`.
+
 ## Run / test / build
 
 ```bash
