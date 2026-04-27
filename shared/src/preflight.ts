@@ -49,8 +49,13 @@ export async function assertCrankBalance(
   const balance = await client.withFallback((conn) =>
     conn.getBalance(pubkey, 'confirmed'),
   );
-  if (balance < required) {
-    return { kind: 'skip', reason: 'low_sol', balance, required };
+  // Sec M-1: a misbehaving custom RPC could in principle return NaN /
+  // Infinity / non-number. `NaN < required` evaluates to false, which would
+  // FAIL-OPEN (allow submit on an unverified balance). Treat any
+  // non-finite-non-negative value as "low_sol" so the gate fails closed.
+  if (!Number.isFinite(balance) || balance < required) {
+    const safeBalance = Number.isFinite(balance) ? balance : 0;
+    return { kind: 'skip', reason: 'low_sol', balance: safeBalance, required };
   }
   return { kind: 'ok', balance };
 }

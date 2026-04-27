@@ -295,10 +295,12 @@ export async function processOt(args: {
     // No multi-RPC client (unit tests): fall back to a direct check.
     try {
       const lamports = await conn.getBalance(cfg.crankKeypair.publicKey, 'confirmed');
-      if (lamports < 5_000_000) {
+      // Sec M-1 (Substep 14 follow-up): NaN/Infinity guard — a misbehaving
+      // RPC returning non-finite lamports would fail-OPEN under `<` alone.
+      if (!Number.isFinite(lamports) || lamports < 5_000_000) {
         logger.warn('convert: crank wallet low SOL — skipping submit', {
           ot: otMint.toBase58(),
-          lamports,
+          lamports: Number.isFinite(lamports) ? lamports : 0,
         });
         return { kind: 'skip', reason: 'low_sol' };
       }
