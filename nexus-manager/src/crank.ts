@@ -35,8 +35,10 @@ import {
   AlreadyRunningError,
   MultiRpcClient,
   SingleInstanceLock,
+  assertCrankBalance,
   logger,
   redactUrl,
+  resolveMinLamportsFromEnv,
 } from '@areal/bots-shared';
 
 import type { ManagerConfig } from './config.js';
@@ -233,6 +235,37 @@ export async function runManagerCycle(deps: CrankDeps): Promise<Decision | null>
       });
     }
     return decision;
+  }
+
+  // 7b. R-60 SOL pre-flight. Skip the submit cleanly when the Manager
+  //     keypair is too low to pay fees + rent. We surface balance + threshold
+  //     so the operator runbook reads obvious; AggregateError (every endpoint
+  //     down) propagates from withFallback inside the helper, but we swallow
+  //     it here because the submit retry will re-surface a richer error.
+  try {
+    const minLamports = resolveMinLamportsFromEnv('NEXUS_MANAGER');
+    const gate = await assertCrankBalance(client, manager.publicKey, minLamports);
+    if (gate.kind === 'skip') {
+      logger.warn('nexus-manager: manager wallet low SOL — skipping submit', {
+        kind: decision.kind,
+        pool: decision.pool.toBase58(),
+        balance: gate.balance,
+        required: gate.required,
+      });
+      if (actionId) {
+        checkpoint.record({
+          actionId,
+          pool: decision.pool.toBase58(),
+          kind: decision.kind as ActionKind,
+          args: decisionArgsForLog(decision),
+          txSignature: null,
+          confirmed: false,
+        });
+      }
+      return decision;
+    }
+  } catch {
+    // All endpoints failed — let the actual submit raise.
   }
 
   // 8. Submit via fallback.

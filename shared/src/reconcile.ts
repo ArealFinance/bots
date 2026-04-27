@@ -47,6 +47,17 @@ const SIGNATURE_PAGE_LIMIT = 1000;
  */
 const STALE_FROM_SLOT_WARN_THRESHOLD = 432_000;
 
+/**
+ * Substep 9 sec L-4: hard cap on how far back we'll page through events,
+ * regardless of the caller's `fromSlot`. Without this, a bot that's been
+ * offline for weeks (or whose checkpoint was clobbered to 0) could walk
+ * millions of signatures — enough to exhaust RPC credit on chatty programs
+ * and DOS the operator's RPC budget. We default the floor to ~1 day at
+ * 400ms slots (~216k slots). Callers can opt out by passing
+ * `enforceFromSlotFloor: false` when they truly want unbounded history.
+ */
+const DEFAULT_FROM_SLOT_FLOOR_LOOKBACK = 216_000;
+
 export interface ReconcileOptions {
   /** Program whose logs we're scanning. */
   programId: PublicKey;
@@ -73,6 +84,18 @@ export interface ReconcileOptions {
    * program. Defaults to 50,000.
    */
   maxSignatures?: number;
+  /**
+   * Substep 9 sec L-4: when `true` (default), the walker raises any
+   * `fromSlot` below `currentSlot - DEFAULT_FROM_SLOT_FLOOR_LOOKBACK` to
+   * the floor, capping the lookback window in slot-space. Set to `false`
+   * for one-off audits that legitimately need to page back further.
+   */
+  enforceFromSlotFloor?: boolean;
+  /**
+   * Override the default floor lookback (slots) — useful when a specific
+   * crank knows its event cadence and wants tighter or looser bounds.
+   */
+  fromSlotFloorLookback?: number;
 }
 
 /** Per-event payload passed to the handler. */
@@ -98,15 +121,40 @@ export async function reconcileEvents(
   options: ReconcileOptions,
   handler: ReconcileHandler,
 ): Promise<number> {
-  const { programId, fromSlot, signal, maxSignatures = 50_000 } = options;
+  const {
+    programId,
+    signal,
+    maxSignatures = 50_000,
+    enforceFromSlotFloor = true,
+    fromSlotFloorLookback = DEFAULT_FROM_SLOT_FLOOR_LOOKBACK,
+  } = options;
+  let fromSlot = options.fromSlot;
   if (signal?.aborted) throw makeAbortError();
 
-  // Warn if the lower bound is suspiciously old — guards against a corrupted
-  // checkpoint (e.g. fromSlot=0 or a value from a long-stopped instance).
-  if (fromSlot !== null && fromSlot > 0) {
+  // Substep 9 sec L-4: enforce a slot-space floor so a corrupted checkpoint
+  // (fromSlot=0, or a value from a long-stopped instance) cannot trigger
+  // an unbounded historical walk. We compute `floor = currentSlot - lookback`
+  // and raise `fromSlot` to it when needed. Operators that legitimately need
+  // a deeper walk pass `enforceFromSlotFloor: false`.
+  if (fromSlot !== null && fromSlot >= 0) {
     try {
       const currentSlot = await conn.getSlot('confirmed');
       const lag = currentSlot - fromSlot;
+
+      if (enforceFromSlotFloor) {
+        const floor = Math.max(0, currentSlot - fromSlotFloorLookback);
+        if (fromSlot < floor) {
+          logger.warn('reconcile fromSlot below floor — raising to safe lookback window', {
+            programId: programId.toBase58(),
+            originalFromSlot: fromSlot,
+            raisedTo: floor,
+            currentSlot,
+            lookbackSlots: fromSlotFloorLookback,
+          });
+          fromSlot = floor;
+        }
+      }
+
       if (lag > STALE_FROM_SLOT_WARN_THRESHOLD) {
         logger.warn('reconcile fromSlot is suspiciously old', {
           programId: programId.toBase58(),

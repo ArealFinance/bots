@@ -14,6 +14,7 @@ import {
   fetchNav,
   fetchPoolAccountList,
   fetchRwtVaultAccounts,
+  fetchTokenAmount,
   fetchYdArealFeeDestination,
   resolveUsdcSide,
 } from '../src/readers.js';
@@ -150,6 +151,33 @@ describe('fetchPoolAccountList', () => {
     const out = await fetchPoolAccountList(mockConn(data), PUB(1));
     expect(out!.vaultA.equals(PUB(0xa1))).toBe(true);
     expect(out!.vaultB.equals(PUB(0xb2))).toBe(true);
+  });
+});
+
+describe('fetchTokenAmount (SPL Token Account amount @ 64..72 LE)', () => {
+  // R-T1 (tester closure): pin happy / missing / wrong-owner branches.
+
+  it('happy path: reads amount u64 LE at offset 64', async () => {
+    const data = Buffer.alloc(165); // SPL Token Account size
+    data.writeBigUInt64LE(987_654_321n, 64);
+    const conn = mockConn(data);
+    const out = await fetchTokenAmount(conn, PUB(1));
+    expect(out).toBe(987_654_321n);
+  });
+
+  it('missing account: returns 0n (per spec — uninitialized ATA reads as zero balance)', async () => {
+    const conn = mockMissingConn();
+    const out = await fetchTokenAmount(conn, PUB(1));
+    expect(out).toBe(0n);
+  });
+
+  it('wrong-owner / unexpected length: throws to surface schema drift', async () => {
+    // R-T1 pins the throw — a too-short data buffer means the account wasn't
+    // an SPL Token Account in the first place; silently returning 0 would
+    // mask a real wiring bug.
+    const data = Buffer.alloc(40); // too small
+    const conn = mockConn(data);
+    await expect(fetchTokenAmount(conn, PUB(1))).rejects.toThrow(/unexpected length/);
   });
 });
 

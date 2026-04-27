@@ -7,8 +7,10 @@ import {
 
 import {
   MultiRpcClient,
+  assertCrankBalance,
   logger,
   reconcileEvents,
+  resolveMinLamportsFromEnv,
 } from '@areal/bots-shared';
 
 import type { BotConfig } from './config.js';
@@ -496,6 +498,32 @@ export async function runClaimCycle(args: {
   client?: MultiRpcClient;
 }): Promise<void> {
   const { conn, cfg, checkpoint, fetcher, lock, client } = args;
+
+  // R-60: shared SOL pre-flight. When SEND_TX is enabled and the wallet is
+  // dry, every per-flow submit would burn an RPC round-trip only to surface
+  // InsufficientFunds. Skip the cycle entirely with a single warn line and
+  // let the next tick re-check after the operator tops up. Decision-only
+  // dry-runs (SEND_TX=false) skip the gate so the cycle still emits its
+  // surface-level decisions for E2E logs.
+  if (cfg.sendTx && client) {
+    try {
+      const minLamports = resolveMinLamportsFromEnv('YIELD_CLAIM');
+      const gate = await assertCrankBalance(
+        client,
+        cfg.crankKeypair.publicKey,
+        minLamports,
+      );
+      if (gate.kind === 'skip') {
+        logger.warn('yield-claim: crank wallet low SOL — skipping entire cycle', {
+          balance: gate.balance,
+          required: gate.required,
+        });
+        return;
+      }
+    } catch {
+      // All endpoints failed — let downstream submits surface a richer error.
+    }
+  }
 
   // (1) Vault claim per OT
   for (const ot of cfg.otProjects) {

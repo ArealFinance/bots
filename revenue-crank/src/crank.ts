@@ -2,8 +2,10 @@ import { Connection, PublicKey } from '@solana/web3.js';
 
 import {
   MultiRpcClient,
+  assertCrankBalance,
   logger,
   reconcileEvents,
+  resolveMinLamportsFromEnv,
 } from '@areal/bots-shared';
 
 import type { BotConfig } from './config.js';
@@ -194,6 +196,31 @@ export async function processOt(args: {
     });
     checkpoint.upsert(otMint.toBase58(), nowSecs, null);
     return decision;
+  }
+
+  // R-60: shared SOL pre-flight. Skip cleanly when the crank wallet is too
+  // low to pay fees — operator-facing logs include both balance and threshold
+  // so the runbook becomes obvious. We swallow the all-RPC-failure case
+  // because the submit itself will surface a richer error on its own retry.
+  if (client) {
+    try {
+      const minLamports = resolveMinLamportsFromEnv('REVENUE');
+      const gate = await assertCrankBalance(
+        client,
+        cfg.crankKeypair.publicKey,
+        minLamports,
+      );
+      if (gate.kind === 'skip') {
+        logger.warn('revenue: crank wallet low SOL — skipping submit', {
+          ot: otMint.toBase58(),
+          balance: gate.balance,
+          required: gate.required,
+        });
+        return { kind: 'skip', reason: 'low_sol' };
+      }
+    } catch {
+      // All endpoints failed — let the submit attempt fail loudly.
+    }
   }
 
   try {

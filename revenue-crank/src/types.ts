@@ -62,4 +62,5 @@ export type SkipReason =
   | 'cooldown'
   | 'concurrent_distribution'
   | 'no_destinations'
-  | 'rpc_error';
+  | 'rpc_error'
+  | 'low_sol';

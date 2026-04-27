@@ -124,6 +124,17 @@ export class SingleInstanceLock {
       await fd.close();
     }
 
+    // Substep 9 sec L-2 verify: belt-and-braces chmod after open. The mode
+    // arg to `open(..., 'w', 0o600)` only governs CREATION; if the path
+    // existed before (stale-reclaim branch) the file keeps its prior perms.
+    // Force 0o600 so a stale lock created by a different umask never leaks
+    // PID+timestamp data to the world.
+    try {
+      await fs.promises.chmod(filePath, 0o600);
+    } catch {
+      // Non-POSIX filesystem (Windows w/o WSL) — best-effort.
+    }
+
     this.filePath = filePath;
 
     // Best-effort cleanup on process exit.

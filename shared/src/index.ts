@@ -39,3 +39,10 @@ export {
   ConsensusError,
 } from './types.js';
 export type { LogLevel, RpcEndpoint } from './types.js';
+
+export {
+  assertCrankBalance,
+  resolveMinLamportsFromEnv,
+  MIN_LAMPORTS_DEFAULT,
+} from './preflight.js';
+export type { AssertCrankBalanceResult } from './preflight.js';

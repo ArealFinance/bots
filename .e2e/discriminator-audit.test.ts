@@ -69,6 +69,13 @@ const CASES: AuditCase[] = [
   { programIdEnv: 'DEX_PROGRAM_ID', ix: 'nexus_remove_liquidity' },
   { programIdEnv: 'DEX_PROGRAM_ID', ix: 'nexus_withdraw_profits' },
   { programIdEnv: 'DEX_PROGRAM_ID', ix: 'nexus_claim_rewards' },
+  // R-T4 (tester closure): claim_lp_fees — Layer 9 LP-fee distribution path.
+  // Note: the on-chain handler is gated on a populated LiquidityNexus
+  // singleton; if R20 is in init_failed[] for the bootstrap, the wrong-disc
+  // probe still works (the dispatch table doesn't depend on Nexus init), but
+  // the known-disc branch may surface AccountNotInitialized which our
+  // isDispatchError filter accepts.
+  { programIdEnv: 'DEX_PROGRAM_ID', ix: 'claim_lp_fees' },
 ];
 
 const RPC_URL = process.env.RPC_URL;

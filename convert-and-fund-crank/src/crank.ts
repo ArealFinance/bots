@@ -2,8 +2,10 @@ import { Connection, PublicKey } from '@solana/web3.js';
 
 import {
   MultiRpcClient,
+  assertCrankBalance,
   logger,
   reconcileEvents,
+  resolveMinLamportsFromEnv,
 } from '@areal/bots-shared';
 
 import type { BotConfig } from './config.js';
@@ -269,23 +271,40 @@ export async function processOt(args: {
   const accumulatorRwtAta = await getAssociatedTokenAddress(cfg.rwtMint, accumulator);
 
   // Pre-flight balance check on the crank wallet (D9 — fail before submit if
-  // we won't be able to pay fees / rent). Sec M-2: route through
-  // client.withFallback so a single endpoint flake doesn't bypass the gate;
-  // an "all endpoints failed" outcome is the only path that swallows the
-  // error.
-  try {
-    const lamports = client
-      ? await client.withFallback(c => c.getBalance(cfg.crankKeypair.publicKey, 'confirmed'))
-      : await conn.getBalance(cfg.crankKeypair.publicKey, 'confirmed');
-    if (lamports < 5_000_000) {
-      logger.warn('convert: crank wallet low SOL — skipping submit', {
-        ot: otMint.toBase58(),
-        lamports,
-      });
-      return { kind: 'skip', reason: 'low_sol' };
+  // we won't be able to pay fees / rent). R-60: route through the shared
+  // assertCrankBalance helper so the gate, threshold, and env override are
+  // identical across all cranks. We still swallow AggregateError (every
+  // endpoint failed) — sending will surface a richer error from RPC, and the
+  // outer cycle handler will retry on the next tick.
+  if (client) {
+    const minLamports = resolveMinLamportsFromEnv('CONVERT');
+    try {
+      const gate = await assertCrankBalance(client, cfg.crankKeypair.publicKey, minLamports);
+      if (gate.kind === 'skip') {
+        logger.warn('convert: crank wallet low SOL — skipping submit', {
+          ot: otMint.toBase58(),
+          balance: gate.balance,
+          required: gate.required,
+        });
+        return { kind: 'skip', reason: 'low_sol' };
+      }
+    } catch {
+      // All RPC endpoints failed — let the submit path fail loudly instead.
     }
-  } catch {
-    // Best-effort; don't fail the cycle when EVERY endpoint failed.
+  } else {
+    // No multi-RPC client (unit tests): fall back to a direct check.
+    try {
+      const lamports = await conn.getBalance(cfg.crankKeypair.publicKey, 'confirmed');
+      if (lamports < 5_000_000) {
+        logger.warn('convert: crank wallet low SOL — skipping submit', {
+          ot: otMint.toBase58(),
+          lamports,
+        });
+        return { kind: 'skip', reason: 'low_sol' };
+      }
+    } catch {
+      // Best-effort.
+    }
   }
 
   // Sec H-1: re-fetch pool reserves at submit time to defend against the
