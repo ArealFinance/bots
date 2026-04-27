@@ -38,6 +38,15 @@ import { logger } from './logger.js';
 
 const SIGNATURE_PAGE_LIMIT = 1000;
 
+/**
+ * If `fromSlot` is older than this many slots, we log a warning before
+ * walking. Solana produces ~1 slot/400ms → 432_000 slots ≈ 2 days. A bot
+ * that has been offline longer than that will burn substantial RPC credit
+ * paging through history; the operator likely wants to truncate the
+ * checkpoint instead.
+ */
+const STALE_FROM_SLOT_WARN_THRESHOLD = 432_000;
+
 export interface ReconcileOptions {
   /** Program whose logs we're scanning. */
   programId: PublicKey;
@@ -91,6 +100,30 @@ export async function reconcileEvents(
 ): Promise<number> {
   const { programId, fromSlot, signal, maxSignatures = 50_000 } = options;
   if (signal?.aborted) throw makeAbortError();
+
+  // Warn if the lower bound is suspiciously old — guards against a corrupted
+  // checkpoint (e.g. fromSlot=0 or a value from a long-stopped instance).
+  if (fromSlot !== null && fromSlot > 0) {
+    try {
+      const currentSlot = await conn.getSlot('confirmed');
+      const lag = currentSlot - fromSlot;
+      if (lag > STALE_FROM_SLOT_WARN_THRESHOLD) {
+        logger.warn('reconcile fromSlot is suspiciously old', {
+          programId: programId.toBase58(),
+          fromSlot,
+          currentSlot,
+          lagSlots: lag,
+          lagApproxDays: Math.round((lag * 0.4) / 86_400),
+          maxSignatures,
+        });
+      }
+    } catch (err) {
+      // getSlot failure is non-fatal — proceed without the floor check.
+      logger.warn('reconcile fromSlot sanity check failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 
   const collected: { signature: string; slot: number; blockTime: number | null }[] = [];
   let before: string | undefined;

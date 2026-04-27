@@ -9,7 +9,12 @@
  *    lock and runs the poll loop until SIGINT / SIGTERM.
  */
 
-import { MultiRpcClient, logger, setLogLevel } from '@areal/bots-shared';
+import {
+  MultiRpcClient,
+  installSignalHandlers,
+  logger,
+  setLogLevel,
+} from '@areal/bots-shared';
 
 import { loadConfig } from './config.js';
 import { startManager } from './crank.js';
@@ -52,16 +57,7 @@ async function main(): Promise<void> {
     // checkpoint. Give it a brief grace window then exit.
     setTimeout(() => process.exit(exitCode), 200).unref();
   };
-  process.once('SIGINT', () => shutdown('SIGINT'));
-  process.once('SIGTERM', () => shutdown('SIGTERM'));
-  process.once('uncaughtException', (e: unknown) => {
-    logger.error('uncaughtException', e);
-    shutdown('uncaughtException', 1);
-  });
-  process.once('unhandledRejection', (e: unknown) => {
-    logger.error('unhandledRejection', e);
-    shutdown('unhandledRejection', 1);
-  });
+  installSignalHandlers(shutdown);
 
   await startManager({ cfg, client, signal: stopController.signal });
 }

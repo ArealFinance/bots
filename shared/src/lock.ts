@@ -38,7 +38,7 @@ import { logger } from './logger.js';
 import { AlreadyRunningError } from './types.js';
 
 export interface LockOptions {
-  /** Directory to write the PID-file in (auto-created with 0o755). */
+  /** Directory to write the PID-file in (auto-created with 0o700 — operator-only). */
   lockDir: string;
   /** Logical instance name — becomes the lock file basename. */
   instanceId: string;
@@ -91,13 +91,18 @@ export class SingleInstanceLock {
     }
     if (this.filePath) return; // already held
 
-    await fs.promises.mkdir(lockDir, { recursive: true });
+    // Operator-only directory — guards against malicious local users
+    // tampering with the PID-file contents to spoof the alive-check.
+    await fs.promises.mkdir(lockDir, { recursive: true, mode: 0o700 });
     const filePath = path.join(lockDir, `${instanceId}.lock`);
 
     // Try to create the file exclusively — if this succeeds we win the race.
+    // Mode 0o600 (operator-only) ensures only the bot user can read/write the
+    // PID payload; world-writable would let a local attacker race the stale-
+    // reclaim path by overwriting startedAt.
     let fd: fs.promises.FileHandle | null = null;
     try {
-      fd = await fs.promises.open(filePath, 'wx');
+      fd = await fs.promises.open(filePath, 'wx', 0o600);
     } catch (err) {
       if (!isAlreadyExists(err)) throw err;
       // File exists. Examine it.
@@ -105,7 +110,7 @@ export class SingleInstanceLock {
       // examineExistingLock either threw AlreadyRunningError (live peer) or
       // returned successfully (stale lock). In the stale case we need to
       // overwrite — open without O_EXCL.
-      fd = await fs.promises.open(filePath, 'w');
+      fd = await fs.promises.open(filePath, 'w', 0o600);
     }
 
     const payload: LockFilePayload = {

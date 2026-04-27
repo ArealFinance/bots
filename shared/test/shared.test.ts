@@ -20,8 +20,10 @@ import { PublicKey } from '@solana/web3.js';
 
 import { MultiRpcClient } from '../src/rpc-pool.js';
 import { consensusRead } from '../src/consensus.js';
+import { parseRpcEndpoints } from '../src/env.js';
 import { SingleInstanceLock } from '../src/lock.js';
 import { reconcileEvents } from '../src/reconcile.js';
+import { installSignalHandlers } from '../src/signals.js';
 import {
   AlreadyRunningError,
   ConsensusError,
@@ -457,5 +459,139 @@ describe('reconcileEvents', () => {
     );
     // We capped collection at 5 signatures.
     expect(dispatched).toBe(5);
+  });
+});
+
+// -- parseRpcEndpoints (shared env helper) ---------------------------------
+
+describe('parseRpcEndpoints', () => {
+  it('parses a single tuple with all fields', () => {
+    const eps = parseRpcEndpoints('https://primary|wss://primary|100');
+    expect(eps).toHaveLength(1);
+    expect(eps[0]!.url).toBe('https://primary');
+    expect(eps[0]!.wsUrl).toBe('wss://primary');
+    expect(eps[0]!.weight).toBe(100);
+    expect(eps[0]!.failureCount).toBe(0);
+  });
+
+  it('parses comma-separated multi-endpoint list with optional ws/weight', () => {
+    const eps = parseRpcEndpoints(
+      'https://a|wss://a|100, https://b|wss://b|50, https://c',
+    );
+    expect(eps).toHaveLength(3);
+    expect(eps[2]!.url).toBe('https://c');
+    expect(eps[2]!.wsUrl).toBeUndefined();
+    expect(eps[2]!.weight).toBe(1);
+  });
+
+  it('rejects empty input', () => {
+    expect(() => parseRpcEndpoints('')).toThrow();
+    expect(() => parseRpcEndpoints('   ')).toThrow();
+  });
+
+  it('rejects malformed weights', () => {
+    expect(() => parseRpcEndpoints('https://a|wss://a|abc')).toThrow();
+    expect(() => parseRpcEndpoints('https://a|wss://a|0')).toThrow();
+    expect(() => parseRpcEndpoints('https://a|wss://a|-5')).toThrow();
+  });
+
+  it('rejects tuple with empty HTTP url', () => {
+    expect(() => parseRpcEndpoints('|wss://a|100')).toThrow(/missing HTTP url/);
+  });
+
+  it('treats empty wsUrl segment as undefined', () => {
+    const eps = parseRpcEndpoints('https://a||100');
+    expect(eps[0]!.url).toBe('https://a');
+    expect(eps[0]!.wsUrl).toBeUndefined();
+    expect(eps[0]!.weight).toBe(100);
+  });
+});
+
+// -- installSignalHandlers (shared signal helper) --------------------------
+
+describe('installSignalHandlers', () => {
+  // process.once registers a one-shot listener. We snapshot the listener set
+  // before+after install to verify exactly the four expected events were wired.
+  // The handlers themselves are exercised via emit() to confirm forwarding.
+
+  const SIGNALS = ['SIGINT', 'SIGTERM', 'uncaughtException', 'unhandledRejection'] as const;
+
+  let beforeCounts: Record<string, number>;
+
+  beforeEach(() => {
+    beforeCounts = Object.fromEntries(
+      SIGNALS.map(s => [s, process.listenerCount(s)]),
+    );
+  });
+
+  afterEach(() => {
+    // Strip any lingering listeners we registered (vitest re-runs would
+    // accumulate them otherwise). The actual handlers are once() so emit
+    // already removed them in the success path.
+    for (const s of SIGNALS) {
+      const extras = process.listenerCount(s) - (beforeCounts[s] ?? 0);
+      if (extras > 0) {
+        const all = process.listeners(s) as Array<(...args: unknown[]) => void>;
+        for (const fn of all.slice(-extras)) process.off(s, fn);
+      }
+    }
+  });
+
+  it('registers exactly four one-shot handlers', () => {
+    const shutdown = vi.fn();
+    installSignalHandlers(shutdown);
+    for (const s of SIGNALS) {
+      expect(process.listenerCount(s)).toBe((beforeCounts[s] ?? 0) + 1);
+    }
+  });
+
+  it('forwards SIGINT/SIGTERM to shutdown with the signal name', () => {
+    const shutdown = vi.fn();
+    installSignalHandlers(shutdown);
+    process.emit('SIGINT' as never);
+    process.emit('SIGTERM' as never);
+    expect(shutdown).toHaveBeenCalledWith('SIGINT');
+    expect(shutdown).toHaveBeenCalledWith('SIGTERM');
+  });
+
+  it('forwards uncaughtException with exit code 1', () => {
+    const shutdown = vi.fn();
+    installSignalHandlers(shutdown);
+    const err = new Error('boom');
+    process.emit('uncaughtException' as never, err as never);
+    expect(shutdown).toHaveBeenCalledWith('uncaughtException', 1);
+  });
+
+  it('forwards unhandledRejection with exit code 1', () => {
+    const shutdown = vi.fn();
+    installSignalHandlers(shutdown);
+    process.emit('unhandledRejection' as never, new Error('rej') as never);
+    expect(shutdown).toHaveBeenCalledWith('unhandledRejection', 1);
+  });
+});
+
+// -- L-2: PID-file mode hardening (operator-only readable) -----------------
+
+describe('SingleInstanceLock file permissions', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'lock-perm-'));
+  });
+
+  afterEach(async () => {
+    await fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('writes the PID file with 0o600 mode (operator-only)', async () => {
+    if (process.platform === 'win32') return; // POSIX modes don't apply
+    const lock = new SingleInstanceLock();
+    await lock.acquire({ lockDir: tmpDir, instanceId: 'perm-test' });
+    const filePath = lock.heldPath();
+    expect(filePath).not.toBeNull();
+    const st = await fs.promises.stat(filePath!);
+    // Mask off file-type bits — keep only permission bits.
+    expect(st.mode & 0o777).toBe(0o600);
+    await lock.release();
   });
 });

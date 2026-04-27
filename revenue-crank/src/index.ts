@@ -2,6 +2,7 @@ import {
   AlreadyRunningError,
   MultiRpcClient,
   SingleInstanceLock,
+  installSignalHandlers,
   logger,
   redactUrl,
   setLogLevel,
@@ -123,16 +124,7 @@ async function main(): Promise<void> {
     logger.info('shutdown complete');
     process.exit(exitCode);
   };
-  process.once('SIGINT', () => void shutdown('SIGINT'));
-  process.once('SIGTERM', () => void shutdown('SIGTERM'));
-  process.once('uncaughtException', (e: unknown) => {
-    logger.error('uncaughtException', e);
-    void shutdown('uncaughtException', 1);
-  });
-  process.once('unhandledRejection', (e: unknown) => {
-    logger.error('unhandledRejection', e);
-    void shutdown('unhandledRejection', 1);
-  });
+  installSignalHandlers(shutdown);
 
   // Run-forever loop. `runLoop` returns only when the abort signal fires.
   try {

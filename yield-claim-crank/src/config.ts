@@ -3,7 +3,10 @@ import * as fs from 'node:fs';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import { z } from 'zod';
 
+import { parseRpcEndpoints } from '@areal/bots-shared';
 import type { RpcEndpoint } from '@areal/bots-shared';
+
+export { parseRpcEndpoints };
 
 const NetworkSchema = z.enum(['devnet', 'mainnet']);
 const LogLevelSchema = z.enum(['debug', 'info', 'warn', 'error']);
@@ -95,39 +98,6 @@ function pubkeyOrThrow(s: string, name: string): PublicKey {
   } catch {
     throw new Error(`${name}: invalid pubkey "${s}"`);
   }
-}
-
-/**
- * Parse the `RPC_URLS` env var into a list of {@link RpcEndpoint}s.
- *
- * Format: comma-separated tuples of `<httpUrl>|<wsUrl>|<weight>`. The WS URL
- * and weight are optional. Mirrors the helper in nexus-manager/src/config.ts
- * to keep cranks environment-compatible.
- */
-export function parseRpcEndpoints(raw: string): RpcEndpoint[] {
-  const parts = raw
-    .split(',')
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
-  if (parts.length === 0) {
-    throw new Error('RPC_URLS must contain at least one endpoint');
-  }
-  return parts.map((tuple, i) => {
-    const [httpUrl, wsUrl, weightStr] = tuple.split('|').map(s => s?.trim());
-    if (!httpUrl) {
-      throw new Error(`RPC_URLS[${i}]: missing HTTP url in "${tuple}"`);
-    }
-    const weight = weightStr ? Number.parseInt(weightStr, 10) : 1;
-    if (!Number.isFinite(weight) || weight <= 0) {
-      throw new Error(`RPC_URLS[${i}]: invalid weight "${weightStr}"`);
-    }
-    return {
-      url: httpUrl,
-      wsUrl: wsUrl && wsUrl.length > 0 ? wsUrl : undefined,
-      weight,
-      failureCount: 0,
-    };
-  });
 }
 
 export function loadConfig(): BotConfig {
