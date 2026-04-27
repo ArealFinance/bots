@@ -114,7 +114,12 @@ solana-keygen new -o revenue-crank/data/revenue-crank.json --no-bip39-passphrase
 
 Edit `revenue-crank/.env`:
 
-- `RPC_URL` / `RPC_WS_URL` — devnet or mainnet RPC.
+- `RPC_URLS` — comma-separated RPC tuples (R29 multi-RPC). Format per
+  tuple: `<httpUrl>|<wsUrl>|<weight>` (wsUrl + weight optional). Add 2-3
+  endpoints in production for failover. Replaces the single-endpoint
+  `RPC_URL` / `RPC_WS_URL` env vars used in earlier revisions.
+- `LOCK_DIR` — directory for the R30 single-instance PID lock (default
+  `./data/locks`). Stale locks (>60s with dead PID) are auto-reclaimed.
 - `OT_PROGRAM_ID` — already pinned to the vanity OT program ID.
 - `OT_PROJECTS` — comma-separated OT mint addresses to monitor.
 - `CHECK_INTERVAL_SECS` — poll fallback cadence (default 3600).

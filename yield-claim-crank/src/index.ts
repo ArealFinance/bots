@@ -10,7 +10,12 @@ import {
 import { CheckpointStore } from './checkpoint.js';
 import { loadConfig } from './config.js';
 import { ProofFetcher } from './proof-fetcher.js';
-import { SingleFlightLock, runLoop, subscribeRootPublished } from './crank.js';
+import {
+  SingleFlightLock,
+  reconcileSinceLastSeen,
+  runLoop,
+  subscribeRootPublished,
+} from './crank.js';
 
 /**
  * yield-claim-crank entrypoint.
@@ -23,7 +28,11 @@ import { SingleFlightLock, runLoop, subscribeRootPublished } from './crank.js';
  * Layer 9 Substep 9 wired in the shared hardening primitives:
  *   - R29: {@link MultiRpcClient} replaces single-RPC `Connection`.
  *   - R30: {@link SingleInstanceLock} guards against duplicate instances.
- *   - R31: handled at WS subscriber layer (see `subscribeRootPublished`).
+ *   - R31: {@link reconcileSinceLastSeen} replays missed RootPublished events
+ *     on startup + after WS reconnects, bounded by the persisted
+ *     `last_seen_slot`. {@link runClaimCycle} is idempotent — on-chain
+ *     `ClaimStatus.cumulative_amount` enforces strict-greater-than, so
+ *     re-runs are safe.
  *
  * For Layer 8, dynamic-account assembly (rwt_claim_ata, liquidity_dest, etc.)
  * is intentionally deferred — the bot runs decisions, logs them, and updates
@@ -91,6 +100,21 @@ async function main(): Promise<void> {
   const dedupe = new SingleFlightLock();
 
   const stopController = new AbortController();
+
+  // R31: catch up on RootPublished signatures we may have missed across
+  // restarts / WS gaps. runClaimCycle is idempotent under on-chain
+  // ClaimStatus.cumulative_amount, so a duplicate run is a no-op.
+  reconcileSinceLastSeen({
+    client,
+    cfg,
+    checkpoint,
+    fetcher,
+    lock: dedupe,
+    signal: stopController.signal,
+  }).catch(err => {
+    logger.error('startup reconcile failed', err);
+  });
+
   const wsSub = subscribeRootPublished({ conn, cfg, checkpoint, fetcher, lock: dedupe });
 
   let alreadyShuttingDown = false;

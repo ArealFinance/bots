@@ -16,6 +16,7 @@ import {
   proofFileToArgs,
   wrapClaimTx,
 } from '../src/claim-builders.js';
+import { parseRpcEndpoints } from '../src/config.js';
 import { decideClaim, SingleFlightLock } from '../src/crank.js';
 import {
   deriveClaimStatusPda,
@@ -390,5 +391,64 @@ describe('proofFileToArgs', () => {
     const args = proofFileToArgs(file);
     expect(args.cumulativeAmount).toBe(500_000n);
     expect(args.proof).toHaveLength(2);
+  });
+});
+
+describe('parseRpcEndpoints (R29 integration)', () => {
+  it('parses a single tuple with all fields', () => {
+    const eps = parseRpcEndpoints('https://primary|wss://primary|100');
+    expect(eps).toHaveLength(1);
+    expect(eps[0]!.url).toBe('https://primary');
+    expect(eps[0]!.wsUrl).toBe('wss://primary');
+    expect(eps[0]!.weight).toBe(100);
+    expect(eps[0]!.failureCount).toBe(0);
+  });
+
+  it('parses comma-separated multi-endpoint list with optional ws/weight', () => {
+    const eps = parseRpcEndpoints(
+      'https://a|wss://a|100, https://b|wss://b|50, https://c',
+    );
+    expect(eps).toHaveLength(3);
+    expect(eps[2]!.url).toBe('https://c');
+    expect(eps[2]!.wsUrl).toBeUndefined();
+    expect(eps[2]!.weight).toBe(1);
+  });
+
+  it('rejects empty input', () => {
+    expect(() => parseRpcEndpoints('')).toThrow();
+    expect(() => parseRpcEndpoints('   ')).toThrow();
+  });
+
+  it('rejects malformed weights', () => {
+    expect(() => parseRpcEndpoints('https://a|wss://a|abc')).toThrow();
+    expect(() => parseRpcEndpoints('https://a|wss://a|0')).toThrow();
+  });
+});
+
+describe('CheckpointStore reconcile state (R31 integration)', () => {
+  let dbPath: string;
+  let store: CheckpointStore;
+
+  beforeEach(() => {
+    dbPath = path.join(os.tmpdir(), `yield-claim-rec-${Date.now()}-${Math.random()}.db`);
+    store = new CheckpointStore(dbPath);
+  });
+
+  afterEach(() => {
+    try { store.close(); } catch { /* noop */ }
+    try { fs.unlinkSync(dbPath); } catch { /* noop */ }
+  });
+
+  it('returns null for unseen programs (cold-start safety branch)', () => {
+    expect(store.getLastSeenSlot('YD_PROG')).toBeNull();
+  });
+
+  it('round-trips highest-seen slot (monotonic upsert)', () => {
+    store.setLastSeenSlot('YD_PROG', 1_000);
+    expect(store.getLastSeenSlot('YD_PROG')).toBe(1_000);
+    store.setLastSeenSlot('YD_PROG', 1_500);
+    expect(store.getLastSeenSlot('YD_PROG')).toBe(1_500);
+    store.setLastSeenSlot('YD_PROG', 800);
+    expect(store.getLastSeenSlot('YD_PROG')).toBe(1_500);
   });
 });
