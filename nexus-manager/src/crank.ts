@@ -214,6 +214,27 @@ export async function runManagerCycle(deps: CrankDeps): Promise<Decision | null>
   const tx = buildTxForDecision(decision, baseCtx, poolCtx);
   if (!tx) return decision;
 
+  // SEND_TX gate (Substep 13). When disabled, log decision and exit.
+  if (!cfg.sendTx) {
+    logger.info('nexus-manager: decision (SEND_TX=false, skipping submit)', {
+      kind: decision.kind,
+      pool: decision.pool.toBase58(),
+      reason: decision.reason,
+      args: decisionArgsForLog(decision),
+    });
+    if (actionId) {
+      checkpoint.record({
+        actionId,
+        pool: decision.pool.toBase58(),
+        kind: decision.kind as ActionKind,
+        args: decisionArgsForLog(decision),
+        txSignature: null,
+        confirmed: false,
+      });
+    }
+    return decision;
+  }
+
   // 8. Submit via fallback.
   let signature: string | null = null;
   try {
@@ -248,6 +269,28 @@ export async function runManagerCycle(deps: CrankDeps): Promise<Decision | null>
   }
 
   return decision;
+}
+
+/**
+ * One full Manager cycle, given a config + client + checkpoint. Used by the
+ * Substep 13 E2E harness to drive the bot deterministically without the
+ * single-instance lock or poll loop. Returns the decision (or `null` on
+ * top-level read failure) for telemetry.
+ */
+export async function runCycle(args: {
+  cfg: ManagerConfig;
+  client: MultiRpcClient;
+  checkpoint: CheckpointStore;
+}): Promise<Decision | null> {
+  const { cfg, client, checkpoint } = args;
+  const baseCtx = resolveBaseCtx(cfg);
+  return runManagerCycle({
+    cfg,
+    client,
+    manager: cfg.managerKeypair,
+    checkpoint,
+    baseCtx,
+  });
 }
 
 /**

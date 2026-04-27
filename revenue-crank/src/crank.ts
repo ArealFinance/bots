@@ -110,8 +110,14 @@ export async function processOt(args: {
   checkpoint: CheckpointStore;
   otMint: PublicKey;
   nowSecs?: number;
+  /**
+   * Optional multi-RPC client used to wrap the send-side via `withFallback`
+   * (R29). When omitted, the call falls back to `conn` directly so unit
+   * tests don't need to mock the pool.
+   */
+  client?: MultiRpcClient;
 }): Promise<DistributionDecision> {
-  const { conn, cfg, checkpoint, otMint } = args;
+  const { conn, cfg, checkpoint, otMint, client } = args;
   const nowSecs = args.nowSecs ?? Math.floor(Date.now() / 1000);
 
   const { revenueAccount, revenueConfig } = deriveRevenuePdas(otMint, cfg.otProgramId);
@@ -177,8 +183,27 @@ export async function processOt(args: {
     config,
   });
 
+  // SEND_TX gate (Substep 13): when disabled, surface the decision and exit
+  // before submitting. Slippage / Authority / cooldown checks remain enforced
+  // on-chain regardless — this gate only prevents the off-chain submission.
+  if (!cfg.sendTx) {
+    logger.info('distribute_revenue decision = SEND (SEND_TX=false, skipping submit)', {
+      ot: otMint.toBase58(),
+      balance: balance.toString(),
+      destinations: config.activeCount,
+    });
+    checkpoint.upsert(otMint.toBase58(), nowSecs, null);
+    return decision;
+  }
+
   try {
-    const sig = await sendDistributeRevenueTx(conn, cfg.crankKeypair, ix);
+    // R29 sweep: wrap the submit in the multi-RPC client when available, so a
+    // single endpoint failure rotates to the next instead of dropping the TX.
+    const sig = client
+      ? await client.withFallback((c) =>
+          sendDistributeRevenueTx(c, cfg.crankKeypair, ix),
+        )
+      : await sendDistributeRevenueTx(conn, cfg.crankKeypair, ix);
     logger.info('distribute_revenue OK', {
       ot: otMint.toBase58(),
       sig,
@@ -205,28 +230,44 @@ export async function runLoop(args: {
   checkpoint: CheckpointStore;
   lock: SingleFlightLock;
   signal: AbortSignal;
+  client?: MultiRpcClient;
 }): Promise<void> {
-  const { conn, cfg, checkpoint, lock, signal } = args;
+  const { conn, cfg, checkpoint, lock, signal, client } = args;
 
   while (!signal.aborted) {
-    for (const ot of cfg.otProjects) {
-      if (signal.aborted) break;
-      const key = ot.toBase58();
-      if (!lock.acquire(key)) {
-        logger.debug('lock held — WS handler in flight, skipping poll', { ot: key });
-        continue;
-      }
-      try {
-        await processOt({ conn, cfg, checkpoint, otMint: ot });
-      } finally {
-        lock.release(key);
-      }
-    }
-
+    await runOnce({ conn, cfg, checkpoint, lock, client });
     if (signal.aborted) break;
-
     await sleep(cfg.checkIntervalSecs * 1000, signal);
   }
+}
+
+/**
+ * One full sweep through every configured OT. Exposed for E2E harness usage —
+ * the bootstrap-driven test calls this directly instead of spawning the
+ * full daemon loop.
+ */
+export async function runOnce(args: {
+  conn: Connection;
+  cfg: BotConfig;
+  checkpoint: CheckpointStore;
+  lock: SingleFlightLock;
+  client?: MultiRpcClient;
+}): Promise<DistributionDecision[]> {
+  const { conn, cfg, checkpoint, lock, client } = args;
+  const out: DistributionDecision[] = [];
+  for (const ot of cfg.otProjects) {
+    const key = ot.toBase58();
+    if (!lock.acquire(key)) {
+      logger.debug('lock held — WS handler in flight, skipping poll', { ot: key });
+      continue;
+    }
+    try {
+      out.push(await processOt({ conn, cfg, checkpoint, otMint: ot, client }));
+    } finally {
+      lock.release(key);
+    }
+  }
+  return out;
 }
 
 /**
@@ -244,8 +285,9 @@ export function subscribeRevenueEvents(args: {
   cfg: BotConfig;
   checkpoint: CheckpointStore;
   lock: SingleFlightLock;
+  client?: MultiRpcClient;
 }): { unsubscribe: () => Promise<void> } {
-  const { conn, cfg, checkpoint, lock } = args;
+  const { conn, cfg, checkpoint, lock, client } = args;
   const subId = conn.onLogs(
     cfg.otProgramId,
     async (logs, ctx) => {
@@ -260,7 +302,7 @@ export function subscribeRevenueEvents(args: {
         const key = ot.toBase58();
         if (!lock.acquire(key)) continue;
         try {
-          await processOt({ conn, cfg, checkpoint, otMint: ot });
+          await processOt({ conn, cfg, checkpoint, otMint: ot, client });
         } catch (e) {
           logger.error('WS-triggered processOt failed', e, { ot: key });
         } finally {
@@ -312,7 +354,7 @@ export async function reconcileSinceLastSeen(args: {
           const key = ot.toBase58();
           if (!lock.acquire(key)) continue;
           try {
-            await processOt({ conn, cfg, checkpoint, otMint: ot });
+            await processOt({ conn, cfg, checkpoint, otMint: ot, client });
           } catch (e) {
             logger.error('reconcile-triggered processOt failed', e, { ot: key });
           } finally {

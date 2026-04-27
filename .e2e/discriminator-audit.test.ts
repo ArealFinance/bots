@@ -1,9 +1,9 @@
 /**
  * R11 — functional discriminator audit.
  *
- * Strengthens R7 (parity tests in `contracts/*/src/cpi.rs`) by issuing a real
- * TX with each pinned `DISC_*` constant against a deployed program and
- * asserting the handler dispatches correctly:
+ * Strengthens R7 (parity tests in `contracts/<program>/src/cpi.rs`) by
+ * issuing a real TX with each pinned `DISC_<ix>` constant against a deployed
+ * program and asserting the handler dispatches correctly:
  *
  *   * known discriminator → either succeeds OR fails with a domain-specific
  *     error (e.g. AccountNotInitialized, InvalidProof, ZeroSlippage). What we
@@ -58,6 +58,17 @@ const CASES: AuditCase[] = [
   { programIdEnv: 'DEX_PROGRAM_ID', ix: 'swap' },
   // OT (Ownership Token)
   { programIdEnv: 'OT_PROGRAM_ID', ix: 'claim_yd_for_treasury' },
+
+  // Layer 9 additions — Liquidity Nexus ix surface (DEX program)
+  { programIdEnv: 'DEX_PROGRAM_ID', ix: 'initialize_nexus' },
+  { programIdEnv: 'DEX_PROGRAM_ID', ix: 'update_nexus_manager' },
+  { programIdEnv: 'DEX_PROGRAM_ID', ix: 'nexus_deposit' },
+  { programIdEnv: 'DEX_PROGRAM_ID', ix: 'nexus_record_deposit' },
+  { programIdEnv: 'DEX_PROGRAM_ID', ix: 'nexus_swap' },
+  { programIdEnv: 'DEX_PROGRAM_ID', ix: 'nexus_add_liquidity' },
+  { programIdEnv: 'DEX_PROGRAM_ID', ix: 'nexus_remove_liquidity' },
+  { programIdEnv: 'DEX_PROGRAM_ID', ix: 'nexus_withdraw_profits' },
+  { programIdEnv: 'DEX_PROGRAM_ID', ix: 'nexus_claim_rewards' },
 ];
 
 const RPC_URL = process.env.RPC_URL;

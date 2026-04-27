@@ -35,12 +35,31 @@ const EnvSchema = z.object({
   COMPUTE_UNIT_LIMIT: z.coerce.number().int().positive().default(300_000),
   COMPUTE_UNIT_PRICE_MICROLAMPORTS: z.coerce.number().int().nonnegative().default(10_000),
 
-  SLIPPAGE_BPS: z.coerce.bigint().default(100n),
+  SLIPPAGE_BPS: z.coerce
+    .bigint()
+    .default(100n)
+    // Sec M-1 — bound the slippage tolerance. >50% would routinely produce
+    // min_rwt_out=0 and surface sandwich attacks; the route-recheck guard
+    // works in concert with this cap.
+    .refine((v) => v >= 0n && v <= 5000n, {
+      message: 'SLIPPAGE_BPS must be in [0, 5000] (≤50%)',
+    }),
   MIN_CONVERT_USDC: z.coerce.bigint().default(1_000_000n),
 
   LOCK_DIR: z.string().default('./data/locks'),
   DB_PATH: z.string().default('./data/checkpoint.db'),
   CHECK_INTERVAL_SECS: z.coerce.number().int().positive().default(300),
+
+  /**
+   * If `true`, the crank submits the on-chain TX. When `false` (default), the
+   * crank stops at the decision step and emits a structured `decision` log
+   * line. Used by Substep 12 bootstrap (decision-only) and Substep 13 E2E
+   * (live submit).
+   */
+  SEND_TX: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
 
   LOG_LEVEL: LogLevelSchema.default('info'),
 });
@@ -74,6 +93,8 @@ export interface BotConfig {
   lockDir: string;
   dbPath: string;
   checkIntervalSecs: number;
+
+  sendTx: boolean;
 
   logLevel: LogLevel;
 }
@@ -134,6 +155,8 @@ export function loadConfig(): BotConfig {
     lockDir: raw.LOCK_DIR,
     dbPath: raw.DB_PATH,
     checkIntervalSecs: raw.CHECK_INTERVAL_SECS,
+
+    sendTx: raw.SEND_TX,
 
     logLevel: raw.LOG_LEVEL,
   };

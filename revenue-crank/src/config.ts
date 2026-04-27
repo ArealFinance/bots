@@ -28,6 +28,17 @@ const EnvSchema = z.object({
   DB_PATH: z.string().default('./data/checkpoint.db'),
   CHECK_INTERVAL_SECS: z.coerce.number().int().positive().default(3600),
 
+  /**
+   * If `true`, the crank submits the on-chain TX. When `false` (default), the
+   * crank stops at the decision step and emits a structured `decision` log
+   * line. Used by Substep 12 bootstrap (decision-only smoke test) and
+   * Substep 13 E2E (live submit).
+   */
+  SEND_TX: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+
   LOG_LEVEL: LogLevelSchema.default('info'),
 });
 
@@ -47,6 +58,8 @@ export interface BotConfig {
   lockDir: string;
   dbPath: string;
   checkIntervalSecs: number;
+
+  sendTx: boolean;
 
   logLevel: LogLevel;
 }
@@ -118,6 +131,8 @@ export function loadConfig(): BotConfig {
     lockDir: raw.LOCK_DIR,
     dbPath: raw.DB_PATH,
     checkIntervalSecs: raw.CHECK_INTERVAL_SECS,
+
+    sendTx: raw.SEND_TX,
 
     logLevel: raw.LOG_LEVEL,
   };

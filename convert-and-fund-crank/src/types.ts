@@ -42,4 +42,14 @@ export type ConvertSkipReason =
   | 'zero_balance'
   | 'no_pool_no_nav'
   | 'rpc_error'
-  | 'in_flight';
+  | 'in_flight'
+  // Sec M-1 — slippage rounded `min_rwt_out` to 0; sandwich-attack surface.
+  | 'zero_min_out'
+  // Sec M-3/M-4 — distinct skip reasons split out from the historic
+  // `rpc_error` catch-all so log analytics can triage incidents:
+  | 'low_sol' // pre-flight balance check failed
+  | 'slippage_drift' // pool moved between decide and submit
+  | 'on_chain_revert' // handler rejected the TX (slippage, invalid arg)
+  | 'submit_failed' // transport / RPC error during sendAndConfirm
+  | 'account_list_incomplete' // dynamic account resolver returned partial set
+  | 'pool_missing'; // master pool snapshot couldn't be read

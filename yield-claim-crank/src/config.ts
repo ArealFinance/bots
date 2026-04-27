@@ -42,6 +42,36 @@ const EnvSchema = z.object({
   LOCK_DIR: z.string().default('./data/locks'),
   DB_PATH: z.string().default('./data/checkpoint.db'),
 
+  /**
+   * If `true`, the crank submits the on-chain TX. When `false` (default), the
+   * crank stops at the decision step and logs only.
+   */
+  SEND_TX: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+
+  /**
+   * Opt-in: when `true` AND `SEND_TX=true`, the crank issues
+   * `YD::withdraw_liquidity_holding` once per RWT distribution epoch. Disabled
+   * by default until R20 lands (RWT_MINT pin migration). See `crank.ts`
+   * `processLiquidityHoldingDrain`.
+   */
+  YIELD_CLAIM_ENABLE_LH_DRAIN: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+
+  /**
+   * Opt-in: when `true` AND `SEND_TX=true`, the crank performs a Nexus USDC
+   * deposit per OT revenue cycle (DEX `nexus_deposit`). Disabled by default
+   * until LiquidityNexus is provisioned end-to-end.
+   */
+  YIELD_CLAIM_ENABLE_NEXUS_DEPOSIT: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+
   LOG_LEVEL: LogLevelSchema.default('info'),
 });
 
@@ -78,6 +108,11 @@ export interface BotConfig {
 
   lockDir: string;
   dbPath: string;
+
+  sendTx: boolean;
+  enableLhDrain: boolean;
+  enableNexusDeposit: boolean;
+
   logLevel: LogLevel;
 }
 
@@ -151,6 +186,11 @@ export function loadConfig(): BotConfig {
 
     lockDir: raw.LOCK_DIR,
     dbPath: raw.DB_PATH,
+
+    sendTx: raw.SEND_TX,
+    enableLhDrain: raw.YIELD_CLAIM_ENABLE_LH_DRAIN,
+    enableNexusDeposit: raw.YIELD_CLAIM_ENABLE_NEXUS_DEPOSIT,
+
     logLevel: raw.LOG_LEVEL,
   };
 }

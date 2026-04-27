@@ -25,7 +25,12 @@ export type ClaimSkipReason =
   | 'no_proof'
   | 'epoch_stale'
   | 'rpc_error'
-  | 'in_flight';
+  | 'in_flight'
+  // Arch M-2: scaffolded flow that intentionally defers TX assembly until an
+  // upstream R-ticket lands (R20 RWT_MINT pin → LH-drain; nexus provisioning
+  // → USDC nexus_deposit). Distinct from `epoch_stale` so log analytics
+  // correctly surfaces "code path not yet built" vs "nothing to claim".
+  | 'deferred';
 
 export interface ClaimTarget {
   /** Distributor PDA — derived from `["merkle_dist", ot_mint]` under YD program. */

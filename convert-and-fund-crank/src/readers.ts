@@ -22,6 +22,12 @@ export const DIST_CONFIG_SEED = Buffer.from('dist_config');
 export const RWT_VAULT_SEED = Buffer.from('rwt_vault');
 /** PDA seed for the RWT engine `RwtDistributionConfig` (singleton). */
 export const RWT_DIST_CONFIG_SEED = Buffer.from('dist_config_rwt');
+/** PDA seed for the DEX `DexConfig` (singleton). */
+export const DEX_CONFIG_SEED = Buffer.from('dex_config');
+
+export function deriveDexConfigPda(dexProgramId: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync([DEX_CONFIG_SEED], dexProgramId)[0];
+}
 
 export function deriveAccumulatorPda(otMint: PublicKey, ydProgramId: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
@@ -144,4 +150,169 @@ export async function fetchPoolSnapshot(
   const info = await conn.getAccountInfo(poolPda, 'confirmed');
   if (!info) return null;
   return parsePoolSnapshot(poolPda, info.data);
+}
+
+/**
+ * Parse a YD `MerkleDistributor` and extract `reward_vault` (32 bytes).
+ *
+ * MerkleDistributor body layout (contracts/yield-distribution/src/state.rs,
+ * after 8-byte discriminator):
+ *   pub authority:        [u8;32]    // 0..32
+ *   pub ot_mint:          [u8;32]    // 32..64
+ *   pub reward_vault:     [u8;32]    // 64..96
+ *   pub merkle_root:      [u8;32]    // 96..128
+ *   pub epoch:            u64        // 128..136
+ *   pub vesting_period:   i64        // 136..144
+ *   pub bump:             u8         // 144..145
+ *
+ * We only need `reward_vault`; pinned via on-chain fixture in the parity
+ * test (R26) so any layout drift is caught at CI time.
+ */
+export const DISTRIBUTOR_REWARD_VAULT_OFFSET_FROM_BODY = 64;
+
+export async function fetchDistributorRewardVault(
+  conn: Connection,
+  distributorPda: PublicKey,
+): Promise<PublicKey | null> {
+  const info = await conn.getAccountInfo(distributorPda, 'confirmed');
+  if (!info) return null;
+  const start = 8 + DISTRIBUTOR_REWARD_VAULT_OFFSET_FROM_BODY;
+  if (info.data.length < start + 32) return null;
+  return new PublicKey(info.data.subarray(start, start + 32));
+}
+
+/**
+ * Parse a YD singleton `DistributionConfig` and extract
+ * `areal_fee_destination_account` (32 bytes).
+ *
+ * DistributionConfig body layout (yield-distribution state.rs):
+ *   pub publish_authority:                [u8;32]    // 0..32
+ *   pub areal_fee_destination_account:    [u8;32]    // 32..64
+ *   pub protocol_fee_bps:                 u16        // 64..66
+ *   pub min_distribution_amount:          u64        // 66..74
+ *   pub bump:                             u8         // 74..75
+ *
+ * The ATA returned here is RWT-denominated and owned by the protocol.
+ */
+export const YD_CONFIG_FEE_DEST_OFFSET_FROM_BODY = 32;
+
+export async function fetchYdArealFeeDestination(
+  conn: Connection,
+  configPda: PublicKey,
+): Promise<PublicKey | null> {
+  const info = await conn.getAccountInfo(configPda, 'confirmed');
+  if (!info) return null;
+  const start = 8 + YD_CONFIG_FEE_DEST_OFFSET_FROM_BODY;
+  if (info.data.length < start + 32) return null;
+  return new PublicKey(info.data.subarray(start, start + 32));
+}
+
+/**
+ * Parse a DEX singleton `DexConfig` and extract `areal_fee_destination`
+ * (32 bytes — USDC-denominated; receives the DEX swap fee).
+ *
+ * DexConfig body layout (native-dex state.rs):
+ *   pub authority:                  [u8;32]   // 0..32
+ *   pub areal_fee_destination:      [u8;32]   // 32..64
+ *   ...
+ */
+export const DEX_CONFIG_FEE_DEST_OFFSET_FROM_BODY = 32;
+
+export async function fetchDexArealFeeDestination(
+  conn: Connection,
+  dexConfigPda: PublicKey,
+): Promise<PublicKey | null> {
+  const info = await conn.getAccountInfo(dexConfigPda, 'confirmed');
+  if (!info) return null;
+  const start = 8 + DEX_CONFIG_FEE_DEST_OFFSET_FROM_BODY;
+  if (info.data.length < start + 32) return null;
+  return new PublicKey(info.data.subarray(start, start + 32));
+}
+
+/**
+ * Parse the `RwtVault` body and extract the `(capital_accumulator_ata,
+ * areal_fee_destination)` pair. Used by `convert_to_rwt` to identify
+ * `rwt_capital_acc` and `rwt_dao_fee_account` accounts (both writable).
+ *
+ * Layout — see fetchNav above. We need:
+ *   pub capital_accumulator_ata: [u8;32]    // body 32..64
+ *   pub areal_fee_destination:   [u8;32]    // body 226..258
+ */
+export const RWT_VAULT_CAPITAL_ACC_OFFSET_FROM_BODY = 32;
+export const RWT_VAULT_AREAL_FEE_DEST_OFFSET_FROM_BODY = 226;
+
+export interface RwtVaultAccounts {
+  capitalAccumulatorAta: PublicKey;
+  arealFeeDestination: PublicKey;
+}
+
+export async function fetchRwtVaultAccounts(
+  conn: Connection,
+  rwtVaultPda: PublicKey,
+): Promise<RwtVaultAccounts | null> {
+  const info = await conn.getAccountInfo(rwtVaultPda, 'confirmed');
+  if (!info) return null;
+  if (info.data.length < 8 + 259) return null;
+  const cap = new PublicKey(
+    info.data.subarray(
+      8 + RWT_VAULT_CAPITAL_ACC_OFFSET_FROM_BODY,
+      8 + RWT_VAULT_CAPITAL_ACC_OFFSET_FROM_BODY + 32,
+    ),
+  );
+  const fee = new PublicKey(
+    info.data.subarray(
+      8 + RWT_VAULT_AREAL_FEE_DEST_OFFSET_FROM_BODY,
+      8 + RWT_VAULT_AREAL_FEE_DEST_OFFSET_FROM_BODY + 32,
+    ),
+  );
+  return { capitalAccumulatorAta: cap, arealFeeDestination: fee };
+}
+
+/**
+ * Resolve the (USDC-side, RWT-side) vault pair on a master pool, given the
+ * canonical USDC mint. Returns `null` when neither pool token matches.
+ */
+export interface PoolUsdcSide {
+  poolUsdcVault: PublicKey;
+  poolRwtVault: PublicKey;
+}
+
+export function resolveUsdcSide(
+  pool: PoolSnapshot,
+  poolVaultA: PublicKey,
+  poolVaultB: PublicKey,
+  usdcMint: PublicKey,
+): PoolUsdcSide | null {
+  if (pool.tokenAMint.equals(usdcMint)) {
+    return { poolUsdcVault: poolVaultA, poolRwtVault: poolVaultB };
+  }
+  if (pool.tokenBMint.equals(usdcMint)) {
+    return { poolUsdcVault: poolVaultB, poolRwtVault: poolVaultA };
+  }
+  return null;
+}
+
+/**
+ * Extract pool vaults A/B from PoolState data. Mirrors the offsets used by
+ * `parsePoolSnapshot` so the two readers stay in lockstep.
+ */
+export const POOL_VAULT_A_OFFSET = 8 + 96;
+export const POOL_VAULT_B_OFFSET = 8 + 128;
+
+export interface PoolAccountList {
+  vaultA: PublicKey;
+  vaultB: PublicKey;
+}
+
+export async function fetchPoolAccountList(
+  conn: Connection,
+  poolPda: PublicKey,
+): Promise<PoolAccountList | null> {
+  const info = await conn.getAccountInfo(poolPda, 'confirmed');
+  if (!info) return null;
+  if (info.data.length < POOL_VAULT_B_OFFSET + 32) return null;
+  return {
+    vaultA: new PublicKey(info.data.subarray(POOL_VAULT_A_OFFSET, POOL_VAULT_A_OFFSET + 32)),
+    vaultB: new PublicKey(info.data.subarray(POOL_VAULT_B_OFFSET, POOL_VAULT_B_OFFSET + 32)),
+  };
 }

@@ -98,7 +98,7 @@ async function main(): Promise<void> {
     logger.error('startup reconcile failed', err);
   });
 
-  const wsSub = subscribeRevenueEvents({ conn, cfg, checkpoint, lock: dedupe });
+  const wsSub = subscribeRevenueEvents({ conn, cfg, checkpoint, lock: dedupe, client });
 
   let alreadyShuttingDown = false;
   const shutdown = async (signal: string, exitCode = 0): Promise<void> => {
@@ -128,7 +128,7 @@ async function main(): Promise<void> {
 
   // Run-forever loop. `runLoop` returns only when the abort signal fires.
   try {
-    await runLoop({ conn, cfg, checkpoint, lock: dedupe, signal: stopController.signal });
+    await runLoop({ conn, cfg, checkpoint, lock: dedupe, signal: stopController.signal, client });
   } catch (err) {
     logger.error('runLoop crashed', err);
     void shutdown('crash', 1);

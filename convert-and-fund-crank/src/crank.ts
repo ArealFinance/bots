@@ -11,13 +11,22 @@ import type { CheckpointStore } from './checkpoint.js';
 import type { ConvertContext, ConvertDecision } from './types.js';
 import {
   deriveAccumulatorPda,
+  deriveDexConfigPda,
+  deriveDistConfigPda,
   deriveDistributorPda,
   deriveRwtVaultPda,
+  fetchDexArealFeeDestination,
+  fetchDistributorRewardVault,
   fetchNav,
+  fetchPoolAccountList,
   fetchPoolSnapshot,
+  fetchRwtVaultAccounts,
   fetchTokenAmount,
+  fetchYdArealFeeDestination,
+  resolveUsdcSide,
 } from './readers.js';
 import { chooseRoute } from './slippage.js';
+import { sendConvertToRwt } from './convert.js';
 
 /**
  * Single-flight lock per OT — same shape as revenue-crank's. WS callback and
@@ -73,6 +82,13 @@ export function decideConvert(
   });
   if (expectedRwt === 0n) {
     return { kind: 'skip', reason: 'no_pool_no_nav' };
+  }
+  // Sec M-1 — min_rwt_out = 0 is a sandwich-attack surface (any output
+  // accepted). Only happens when slippageBps is pathologically large or
+  // amounts round to zero through the swap-fee path. Same defensive guard
+  // as Substep 11 dashboard sec M-1.
+  if (minRwtOut === 0n) {
+    return { kind: 'skip', reason: 'zero_min_out' };
   }
   return {
     kind: 'send',
@@ -153,8 +169,9 @@ export async function processOt(args: {
   cfg: BotConfig;
   checkpoint: CheckpointStore;
   otMint: PublicKey;
+  client?: MultiRpcClient;
 }): Promise<ConvertDecision> {
-  const { conn, cfg, checkpoint, otMint } = args;
+  const { conn, cfg, checkpoint, otMint, client } = args;
 
   const ctxOrErr = await readConvertContext({ conn, cfg, otMint });
   if ('kind' in ctxOrErr && ctxOrErr.kind === 'rpc_error') {
@@ -178,39 +195,240 @@ export async function processOt(args: {
     return decision;
   }
 
-  // To send the TX we need the additional account list — these come from
-  // on-chain state we already touched (DistributionConfig.areal_fee_destination,
-  // MerkleDistributor.reward_vault, RwtVault's capital_acc + dao_fee_account,
-  // and the master pool's vaults). Layer 8 §8.2.3 lists them.
-  //
-  // Reading those structs requires per-program state parsers that we keep
-  // intentionally lightweight: the bot ships with parsers ONLY for the fields
-  // it needs, and never for fields that mutate within the convert TX.
-  //
-  // For Layer 8 launch the operator wires these in via env (REWARD_VAULT, etc.)
-  // OR runs a small one-shot bootstrap that reads them via the contracts'
-  // public state. To keep this file deterministic we stop short of issuing
-  // the TX here and surface the decision; the integration test or operator
-  // tooling assembles the full TX. (See README — "Wiring fee_account / vaults".)
-  //
-  // TODO(Step 10 E2E): wire the dynamic on-chain reads + sendConvertToRwt
-  // call once an integration fixture exists. Until then, callers can compose
-  // `buildConvertToRwtIx` from `src/convert.ts` themselves — every account
-  // they need is derivable.
-
   const distributor = deriveDistributorPda(otMint, cfg.ydProgramId);
-  logger.info('convert decision = SEND (assembly deferred to caller)', {
-    ot: otMint.toBase58(),
-    distributor: distributor.toBase58(),
-    usdcAmount: decision.usdcAmount.toString(),
-    minRwtOut: decision.minRwtOut.toString(),
-    swapFirst: decision.swapFirst,
+  const accumulator = deriveAccumulatorPda(otMint, cfg.ydProgramId);
+  const ydConfigPda = deriveDistConfigPda(cfg.ydProgramId);
+  const rwtVaultPda = deriveRwtVaultPda(cfg.rwtEngineProgramId);
+  const dexConfigPda = deriveDexConfigPda(cfg.dexProgramId);
+
+  // SEND_TX gate (Substep 13). When disabled, surface decision and return.
+  if (!cfg.sendTx) {
+    logger.info('convert decision = SEND (SEND_TX=false, skipping submit)', {
+      ot: otMint.toBase58(),
+      distributor: distributor.toBase58(),
+      usdcAmount: decision.usdcAmount.toString(),
+      minRwtOut: decision.minRwtOut.toString(),
+      swapFirst: decision.swapFirst,
+    });
+    const slot = BigInt(await conn.getSlot('confirmed'));
+    checkpoint.upsert(otMint.toBase58(), slot, null);
+    return decision;
+  }
+
+  // Resolve dynamic on-chain accounts needed for full TX assembly.
+  // We read everything in parallel from `conn` (consensus is overkill —
+  // these structs are static once initialized; routine reads).
+  let rewardVault: PublicKey | null;
+  let ydArealFeeDest: PublicKey | null;
+  let rwtVaultAccs: Awaited<ReturnType<typeof fetchRwtVaultAccounts>>;
+  let dexArealFeeDest: PublicKey | null;
+  let poolAccs: Awaited<ReturnType<typeof fetchPoolAccountList>>;
+  try {
+    [rewardVault, ydArealFeeDest, rwtVaultAccs, dexArealFeeDest, poolAccs] = await Promise.all([
+      fetchDistributorRewardVault(conn, distributor),
+      fetchYdArealFeeDestination(conn, ydConfigPda),
+      fetchRwtVaultAccounts(conn, rwtVaultPda),
+      fetchDexArealFeeDestination(conn, dexConfigPda),
+      fetchPoolAccountList(conn, cfg.rwtUsdcPool),
+    ]);
+  } catch (err) {
+    logger.error('convert: account-list fetch failed', err, { ot: otMint.toBase58() });
+    return { kind: 'skip', reason: 'submit_failed' };
+  }
+
+  if (!rewardVault || !ydArealFeeDest || !rwtVaultAccs || !dexArealFeeDest || !poolAccs) {
+    logger.warn('convert: account-list incomplete, skipping submit', {
+      ot: otMint.toBase58(),
+      hasRewardVault: !!rewardVault,
+      hasYdFeeDest: !!ydArealFeeDest,
+      hasRwtVaultAccs: !!rwtVaultAccs,
+      hasDexFeeDest: !!dexArealFeeDest,
+      hasPoolAccs: !!poolAccs,
+    });
+    return { kind: 'skip', reason: 'account_list_incomplete' };
+  }
+
+  if (!ctx.pool) {
+    logger.warn('convert: pool snapshot missing, skipping submit', {
+      ot: otMint.toBase58(),
+    });
+    return { kind: 'skip', reason: 'pool_missing' };
+  }
+
+  // Resolve which side of the pool is USDC (vault_in for swap_first=true).
+  const usdcSide = resolveUsdcSide(ctx.pool, poolAccs.vaultA, poolAccs.vaultB, cfg.usdcMint);
+  if (!usdcSide) {
+    logger.error('convert: pool does not contain USDC mint', undefined, {
+      ot: otMint.toBase58(),
+      pool: cfg.rwtUsdcPool.toBase58(),
+    });
+    return { kind: 'skip', reason: 'pool_missing' };
+  }
+
+  const accumulatorUsdcAta = await getAssociatedTokenAddress(cfg.usdcMint, accumulator);
+  const accumulatorRwtAta = await getAssociatedTokenAddress(cfg.rwtMint, accumulator);
+
+  // Pre-flight balance check on the crank wallet (D9 — fail before submit if
+  // we won't be able to pay fees / rent). Sec M-2: route through
+  // client.withFallback so a single endpoint flake doesn't bypass the gate;
+  // an "all endpoints failed" outcome is the only path that swallows the
+  // error.
+  try {
+    const lamports = client
+      ? await client.withFallback(c => c.getBalance(cfg.crankKeypair.publicKey, 'confirmed'))
+      : await conn.getBalance(cfg.crankKeypair.publicKey, 'confirmed');
+    if (lamports < 5_000_000) {
+      logger.warn('convert: crank wallet low SOL — skipping submit', {
+        ot: otMint.toBase58(),
+        lamports,
+      });
+      return { kind: 'skip', reason: 'low_sol' };
+    }
+  } catch {
+    // Best-effort; don't fail the cycle when EVERY endpoint failed.
+  }
+
+  // Sec H-1: re-fetch pool reserves at submit time to defend against the
+  // sandwich-attack window between decide (line 117) and submit. Without a
+  // fresh snapshot, `chooseRoute` would assert the same minRwtOut against
+  // the stale reserves — a no-op tautology. Wrapping the read in
+  // client.withFallback keeps the same R29 fallback policy as the submit.
+  let freshPool = ctx.pool;
+  try {
+    const refetched = client
+      ? await client.withFallback(c => fetchPoolSnapshot(c, cfg.rwtUsdcPool))
+      : await fetchPoolSnapshot(conn, cfg.rwtUsdcPool);
+    if (refetched) {
+      freshPool = refetched;
+    } else {
+      logger.warn('convert: pool refetch returned null, falling back to stale snapshot', {
+        ot: otMint.toBase58(),
+      });
+    }
+  } catch (err) {
+    logger.warn('convert: pool refetch failed, falling back to stale snapshot', {
+      ot: otMint.toBase58(),
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  const recheck = chooseRoute({
+    usdcAmount: ctx.accumulatorUsdcBalance,
+    pool: freshPool,
+    usdcMint: cfg.usdcMint,
+    nav: ctx.navBookValue,
+    slippageBps: cfg.slippageBps,
   });
-  // Refresh checkpoint with current slot so dashboards see liveness even
-  // before the TX path is wired in.
-  const slot = BigInt(await conn.getSlot('confirmed'));
-  checkpoint.upsert(otMint.toBase58(), slot, null);
-  return decision;
+  // Drift threshold: 2× declared slippage. Tighter than min-only check;
+  // catches the case where reserves moved unfavorably but the recheck's
+  // minRwtOut is still nominally >= decision.minRwtOut.
+  const driftBps =
+    decision.minRwtOut > 0n
+      ? ((decision.minRwtOut - recheck.minRwtOut) * 10_000n) / decision.minRwtOut
+      : 0n;
+  if (
+    recheck.swapFirst !== decision.swapFirst ||
+    recheck.minRwtOut < decision.minRwtOut ||
+    driftBps > cfg.slippageBps * 2n
+  ) {
+    logger.warn('convert: route drifted between decide and submit, retrying next tick', {
+      ot: otMint.toBase58(),
+      decideMin: decision.minRwtOut.toString(),
+      recheckMin: recheck.minRwtOut.toString(),
+      driftBps: driftBps.toString(),
+    });
+    return { kind: 'skip', reason: 'slippage_drift' };
+  }
+
+  // Build + submit. Wrap in withFallback when a multi-RPC client is wired.
+  try {
+    const submit = (c: Connection): Promise<{ signature: string }> =>
+      sendConvertToRwt(c, cfg.crankKeypair, {
+        ydProgramId: cfg.ydProgramId,
+        dexProgramId: cfg.dexProgramId,
+        rwtEngineProgramId: cfg.rwtEngineProgramId,
+        crank: cfg.crankKeypair.publicKey,
+        otMint,
+        accumulatorUsdcAta,
+        accumulatorRwtAta,
+        feeAccount: ydArealFeeDest!,
+        rewardVault: rewardVault!,
+        rwtMint: cfg.rwtMint,
+        dexConfig: dexConfigPda,
+        poolState: cfg.rwtUsdcPool,
+        dexPoolVaultIn: usdcSide.poolUsdcVault,
+        dexPoolVaultOut: usdcSide.poolRwtVault,
+        dexArealFeeAccount: dexArealFeeDest!,
+        rwtCapitalAcc: rwtVaultAccs!.capitalAccumulatorAta,
+        rwtDaoFeeAccount: rwtVaultAccs!.arealFeeDestination,
+        usdcAmount: decision.usdcAmount,
+        minRwtOut: decision.minRwtOut,
+        swapFirst: decision.swapFirst,
+        computeUnitLimit: cfg.computeUnitLimit,
+        computeUnitPriceMicroLamports: cfg.computeUnitPriceMicroLamports,
+      }).then(({ signature }) => ({ signature }));
+
+    const { signature } = client
+      ? await client.withFallback(submit)
+      : await submit(conn);
+
+    logger.info('convert_to_rwt OK', {
+      ot: otMint.toBase58(),
+      sig: signature,
+      usdcAmount: decision.usdcAmount.toString(),
+      swapFirst: decision.swapFirst,
+    });
+    const slot = BigInt(await conn.getSlot('confirmed'));
+    checkpoint.upsert(otMint.toBase58(), slot, signature);
+    return decision;
+  } catch (err) {
+    // Sec M-4 — distinguish on-chain reverts (handler said no) from RPC
+    // transport failures (endpoint dropped). Anchor / Solana surfaces the
+    // former as `SendTransactionError` carrying a `Custom(N)` instruction
+    // error in the logs string. Either way the checkpoint is NOT advanced
+    // (idempotent retry); the split is for incident-triage signal.
+    const message = err instanceof Error ? err.message : String(err);
+    const isOnChainRevert =
+      /custom program error|InstructionError|Transaction simulation failed/i.test(message);
+    if (isOnChainRevert) {
+      logger.warn('convert_to_rwt reverted on-chain', {
+        ot: otMint.toBase58(),
+        message,
+      });
+      return { kind: 'skip', reason: 'on_chain_revert', details: { message } };
+    }
+    logger.error('convert_to_rwt submit failed', err, {
+      ot: otMint.toBase58(),
+      message,
+    });
+    return { kind: 'skip', reason: 'submit_failed', details: { message } };
+  }
+}
+
+/**
+ * One full sweep through every configured OT. Exposed for E2E harness usage.
+ */
+export async function runOnce(args: {
+  conn: Connection;
+  cfg: BotConfig;
+  checkpoint: CheckpointStore;
+  lock: SingleFlightLock;
+  client?: MultiRpcClient;
+}): Promise<ConvertDecision[]> {
+  const { conn, cfg, checkpoint, lock, client } = args;
+  const out: ConvertDecision[] = [];
+  for (const ot of cfg.otProjects) {
+    const key = ot.toBase58();
+    if (!lock.acquire(key)) {
+      logger.debug('lock held — WS handler in flight, skipping poll', { ot: key });
+      continue;
+    }
+    try {
+      out.push(await processOt({ conn, cfg, checkpoint, otMint: ot, client }));
+    } finally {
+      lock.release(key);
+    }
+  }
+  return out;
 }
 
 /**
@@ -222,22 +440,11 @@ export async function runLoop(args: {
   checkpoint: CheckpointStore;
   lock: SingleFlightLock;
   signal: AbortSignal;
+  client?: MultiRpcClient;
 }): Promise<void> {
-  const { conn, cfg, checkpoint, lock, signal } = args;
+  const { cfg, signal } = args;
   while (!signal.aborted) {
-    for (const ot of cfg.otProjects) {
-      if (signal.aborted) break;
-      const key = ot.toBase58();
-      if (!lock.acquire(key)) {
-        logger.debug('lock held — WS handler in flight, skipping poll', { ot: key });
-        continue;
-      }
-      try {
-        await processOt({ conn, cfg, checkpoint, otMint: ot });
-      } finally {
-        lock.release(key);
-      }
-    }
+    await runOnce(args);
     if (signal.aborted) break;
     await sleep(cfg.checkIntervalSecs * 1000, signal);
   }
@@ -257,8 +464,9 @@ export function subscribeRevenueDistributed(args: {
   checkpoint: CheckpointStore;
   lock: SingleFlightLock;
   otProgramId: PublicKey;
+  client?: MultiRpcClient;
 }): { unsubscribe: () => Promise<void> } {
-  const { conn, cfg, checkpoint, lock, otProgramId } = args;
+  const { conn, cfg, checkpoint, lock, otProgramId, client } = args;
   const subId = conn.onLogs(
     otProgramId,
     async (logs, ctx) => {
@@ -270,7 +478,7 @@ export function subscribeRevenueDistributed(args: {
         const key = ot.toBase58();
         if (!lock.acquire(key)) continue;
         try {
-          await processOt({ conn, cfg, checkpoint, otMint: ot });
+          await processOt({ conn, cfg, checkpoint, otMint: ot, client });
         } catch (e) {
           logger.error('WS-triggered convert processOt failed', e, { ot: key });
         } finally {
@@ -321,7 +529,7 @@ export async function reconcileSinceLastSeen(args: {
           const key = ot.toBase58();
           if (!lock.acquire(key)) continue;
           try {
-            await processOt({ conn, cfg, checkpoint, otMint: ot });
+            await processOt({ conn, cfg, checkpoint, otMint: ot, client });
           } catch (e) {
             logger.error('reconcile-triggered processOt failed', e, { ot: key });
           } finally {

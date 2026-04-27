@@ -106,8 +106,9 @@ export async function processVaultClaim(args: {
   fetcher: ProofFetcher;
   otMint: PublicKey;
   inputs: VaultClaimInputs | null; // null → log decision only
+  client?: MultiRpcClient;
 }): Promise<ClaimDecision> {
-  const { conn, cfg, checkpoint, fetcher, otMint, inputs } = args;
+  const { conn, cfg, checkpoint, fetcher, otMint, inputs, client } = args;
 
   const distributor = deriveDistributorPda(otMint, cfg.ydProgramId);
   const rwtVault = deriveRwtVaultPda(cfg.rwtEngineProgramId);
@@ -183,6 +184,7 @@ export async function processVaultClaim(args: {
     kind: 'vault',
     key: otMint.toBase58(),
     decision,
+    client,
   });
 }
 
@@ -202,8 +204,9 @@ export async function processPoolCompound(args: {
   fetcher: ProofFetcher;
   pool: PublicKey;
   inputs: PoolCompoundInputs | null;
+  client?: MultiRpcClient;
 }): Promise<ClaimDecision> {
-  const { conn, cfg, checkpoint, fetcher, pool, inputs } = args;
+  const { conn, cfg, checkpoint, fetcher, pool, inputs, client } = args;
   if (!inputs) {
     // Without inputs we can't even derive distributor / claim status meaningfully;
     // log a hint and return.
@@ -264,6 +267,7 @@ export async function processPoolCompound(args: {
     kind: 'pool',
     key: pool.toBase58(),
     decision,
+    client,
   });
 }
 
@@ -284,8 +288,9 @@ export async function processTreasuryClaim(args: {
   /** OT mint of the source distributor — may differ from `otMint`. */
   ydOtMint: PublicKey;
   inputs: TreasuryClaimInputs | null;
+  client?: MultiRpcClient;
 }): Promise<ClaimDecision> {
-  const { conn, cfg, checkpoint, fetcher, otMint, ydOtMint, inputs } = args;
+  const { conn, cfg, checkpoint, fetcher, otMint, ydOtMint, inputs, client } = args;
   const otTreasury = deriveOtTreasuryPda(otMint, cfg.otProgramId);
   const distributor = deriveDistributorPda(ydOtMint, cfg.ydProgramId);
 
@@ -355,6 +360,7 @@ export async function processTreasuryClaim(args: {
     kind: 'treasury',
     key,
     decision,
+    client,
   });
 }
 
@@ -366,13 +372,33 @@ async function sendAndCheckpoint(args: {
   kind: ClaimKind;
   key: string;
   decision: ClaimDecision & { kind: 'send' };
+  client?: MultiRpcClient;
 }): Promise<ClaimDecision> {
-  const { conn, cfg, checkpoint, tx, kind, key, decision } = args;
-  try {
-    const sig = await sendAndConfirmTransaction(conn, tx, [cfg.crankKeypair], {
-      commitment: 'confirmed',
-      skipPreflight: false,
+  const { conn, cfg, checkpoint, tx, kind, key, decision, client } = args;
+
+  // SEND_TX gate (Substep 13). When disabled, surface the decision and exit.
+  if (!cfg.sendTx) {
+    logger.info(`${kind} claim decision = SEND (SEND_TX=false, skipping submit)`, {
+      key,
+      epoch: decision.epoch.toString(),
+      cumulative: decision.cumulativeAmount.toString(),
     });
+    return decision;
+  }
+
+  try {
+    // R29 sweep: prefer multi-RPC fallback when available.
+    const sig = client
+      ? await client.withFallback((c) =>
+          sendAndConfirmTransaction(c, tx, [cfg.crankKeypair], {
+            commitment: 'confirmed',
+            skipPreflight: false,
+          }),
+        )
+      : await sendAndConfirmTransaction(conn, tx, [cfg.crankKeypair], {
+          commitment: 'confirmed',
+          skipPreflight: false,
+        });
     logger.info(`${kind} claim OK`, {
       key,
       sig,
@@ -388,7 +414,78 @@ async function sendAndCheckpoint(args: {
 }
 
 /**
- * Run all three flows once. Stops only on AbortSignal.
+ * Drain accumulated RWT from `LiquidityHolding` once per epoch via
+ * `YD::withdraw_liquidity_holding`. Opt-in (`YIELD_CLAIM_ENABLE_LH_DRAIN`) and
+ * gated by `SEND_TX`. Disabled by default until R20 (RWT_MINT pin migration)
+ * lands — until then the YD program rejects the holding init/drain.
+ *
+ * NOTE: full TX assembly (account list, discriminator) is intentionally
+ * deferred to the operator-side runbook because the on-chain handler is
+ * pinned to a specific RWT mint that may not match the bootstrap. The bot
+ * surfaces the decision so dashboards / E2E logs flag the pending action.
+ */
+export async function processLiquidityHoldingDrain(args: {
+  conn: Connection;
+  cfg: BotConfig;
+  fetcher: ProofFetcher;
+}): Promise<ClaimDecision> {
+  const { cfg } = args;
+  if (!cfg.enableLhDrain) {
+    return { kind: 'skip', reason: 'deferred' };
+  }
+  if (!cfg.sendTx) {
+    logger.info('lh-drain: opt-in enabled, dry-run (SEND_TX=false)', {
+      note: 'TX assembly deferred until R20 RWT_MINT pin migration lands',
+    });
+    return { kind: 'skip', reason: 'deferred' };
+  }
+  // R20 / R-58: full assembly lands once the RWT mint pin migration is final.
+  // Use `logger.debug` (not `warn`) to avoid spamming operators on every
+  // claim cycle once they explicitly opt in — they already know R20 pends.
+  logger.debug('lh-drain: opt-in enabled but TX assembly gated on R20', {
+    note: 'see R-58 / SD-29',
+  });
+  return { kind: 'skip', reason: 'deferred' };
+}
+
+/**
+ * Per-OT-revenue-cycle USDC `nexus_deposit` flow (DEX program). Opt-in
+ * (`YIELD_CLAIM_ENABLE_NEXUS_DEPOSIT`) and gated by `SEND_TX`. The on-chain
+ * `nexus_deposit` ix is permissionless, so any signer can fund the
+ * LiquidityNexus from the OT Treasury USDC ATA. Wiring of the full TX
+ * (account list + discriminator) lands once nexus-manager's tx-builders
+ * surface a public helper for the deposit path.
+ */
+export async function processNexusDeposit(args: {
+  conn: Connection;
+  cfg: BotConfig;
+  otMint: PublicKey;
+}): Promise<ClaimDecision> {
+  const { cfg } = args;
+  if (!cfg.enableNexusDeposit) {
+    return { kind: 'skip', reason: 'deferred' };
+  }
+  if (!cfg.sendTx) {
+    logger.info('nexus-deposit: opt-in enabled, dry-run (SEND_TX=false)', {
+      ot: args.otMint.toBase58(),
+      note: 'TX assembly defers to nexus-manager builders',
+    });
+    return { kind: 'skip', reason: 'deferred' };
+  }
+  logger.debug(
+    'nexus-deposit: opt-in enabled but TX assembly defers to nexus-manager builders',
+    { ot: args.otMint.toBase58(), note: 'see SD-29' },
+  );
+  return { kind: 'skip', reason: 'deferred' };
+}
+
+/**
+ * Run all flows once. Stops only on AbortSignal.
+ *
+ * Ordering matters:
+ *   (1) vault claim → (2) pool compound → (3) treasury claim
+ *   (4) opt-in: LH drain (per epoch)
+ *   (5) opt-in: nexus_deposit (per OT)
  */
 export async function runClaimCycle(args: {
   conn: Connection;
@@ -396,8 +493,9 @@ export async function runClaimCycle(args: {
   checkpoint: CheckpointStore;
   fetcher: ProofFetcher;
   lock: SingleFlightLock;
+  client?: MultiRpcClient;
 }): Promise<void> {
-  const { conn, cfg, checkpoint, fetcher, lock } = args;
+  const { conn, cfg, checkpoint, fetcher, lock, client } = args;
 
   // (1) Vault claim per OT
   for (const ot of cfg.otProjects) {
@@ -411,6 +509,7 @@ export async function runClaimCycle(args: {
         fetcher,
         otMint: ot,
         inputs: null,
+        client,
       });
     } finally {
       lock.release(k);
@@ -429,6 +528,7 @@ export async function runClaimCycle(args: {
         fetcher,
         pool,
         inputs: null,
+        client,
       });
     } finally {
       lock.release(k);
@@ -448,11 +548,52 @@ export async function runClaimCycle(args: {
         otMint: cfg.arlOtMint,
         ydOtMint,
         inputs: null,
+        client,
       });
     } finally {
       lock.release(k);
     }
   }
+
+  // (4) Opt-in LH drain (gated on YIELD_CLAIM_ENABLE_LH_DRAIN + SEND_TX)
+  if (cfg.enableLhDrain) {
+    const k = 'lh-drain:singleton';
+    if (lock.acquire(k)) {
+      try {
+        await processLiquidityHoldingDrain({ conn, cfg, fetcher });
+      } finally {
+        lock.release(k);
+      }
+    }
+  }
+
+  // (5) Opt-in nexus_deposit per OT (gated on YIELD_CLAIM_ENABLE_NEXUS_DEPOSIT)
+  if (cfg.enableNexusDeposit) {
+    for (const ot of cfg.otProjects) {
+      const k = `nexus-deposit:${ot.toBase58()}`;
+      if (!lock.acquire(k)) continue;
+      try {
+        await processNexusDeposit({ conn, cfg, otMint: ot });
+      } finally {
+        lock.release(k);
+      }
+    }
+  }
+}
+
+/**
+ * E2E entrypoint: run the claim cycle once and return. Wraps the per-flow
+ * single-flight lock to keep the harness deterministic.
+ */
+export async function runOnce(args: {
+  conn: Connection;
+  cfg: BotConfig;
+  checkpoint: CheckpointStore;
+  fetcher: ProofFetcher;
+  lock: SingleFlightLock;
+  client?: MultiRpcClient;
+}): Promise<void> {
+  await runClaimCycle(args);
 }
 
 export async function runLoop(args: {
@@ -462,6 +603,7 @@ export async function runLoop(args: {
   fetcher: ProofFetcher;
   lock: SingleFlightLock;
   signal: AbortSignal;
+  client?: MultiRpcClient;
 }): Promise<void> {
   const { signal } = args;
   while (!signal.aborted) {
@@ -486,6 +628,7 @@ export function subscribeRootPublished(args: {
   checkpoint: CheckpointStore;
   fetcher: ProofFetcher;
   lock: SingleFlightLock;
+  client?: MultiRpcClient;
 }): { unsubscribe: () => Promise<void> } {
   const { conn, cfg, checkpoint } = args;
   const subId = conn.onLogs(

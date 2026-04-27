@@ -124,6 +124,7 @@ async function main(): Promise<void> {
     checkpoint,
     lock: dedupe,
     otProgramId: cfg.otProgramId,
+    client,
   });
 
   let alreadyShuttingDown = false;
@@ -153,7 +154,7 @@ async function main(): Promise<void> {
   installSignalHandlers(shutdown);
 
   try {
-    await runLoop({ conn, cfg, checkpoint, lock: dedupe, signal: stopController.signal });
+    await runLoop({ conn, cfg, checkpoint, lock: dedupe, signal: stopController.signal, client });
   } catch (err) {
     logger.error('runLoop crashed', err);
     void shutdown('crash', 1);

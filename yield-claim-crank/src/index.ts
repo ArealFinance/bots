@@ -116,7 +116,7 @@ async function main(): Promise<void> {
     logger.error('startup reconcile failed', err);
   });
 
-  const wsSub = subscribeRootPublished({ conn, cfg, checkpoint, fetcher, lock: dedupe });
+  const wsSub = subscribeRootPublished({ conn, cfg, checkpoint, fetcher, lock: dedupe, client });
 
   let alreadyShuttingDown = false;
   const shutdown = async (signal: string, exitCode = 0): Promise<void> => {
@@ -152,6 +152,7 @@ async function main(): Promise<void> {
       fetcher,
       lock: dedupe,
       signal: stopController.signal,
+      client,
     });
   } catch (err) {
     logger.error('runLoop crashed', err);

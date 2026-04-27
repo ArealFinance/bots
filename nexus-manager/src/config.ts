@@ -53,6 +53,16 @@ const EnvSchema = z.object({
   /** Comma-separated PoolState PDAs the bot manages. Empty = idle. */
   NEXUS_MANAGED_POOLS: z.string().default(''),
 
+  /**
+   * If `true`, the manager submits non-noop decisions on-chain. When `false`
+   * (default), the cycle stops at the decision step and logs only — useful
+   * for dry-runs and Substep 12 bootstrap.
+   */
+  SEND_TX: z
+    .string()
+    .default('false')
+    .transform((v) => v === 'true' || v === '1'),
+
   LOG_LEVEL: LogLevelSchema.default('info'),
 });
 
@@ -81,6 +91,8 @@ export interface ManagerConfig {
   rwtMint: PublicKey;
 
   managedPools: PublicKey[];
+
+  sendTx: boolean;
 
   logLevel: LogLevel;
 }
@@ -159,6 +171,8 @@ export function loadConfig(): ManagerConfig {
     rwtMint,
 
     managedPools,
+
+    sendTx: raw.SEND_TX,
 
     logLevel: raw.LOG_LEVEL,
   };
