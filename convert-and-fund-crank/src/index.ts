@@ -1,9 +1,20 @@
-import { Connection } from '@solana/web3.js';
+import {
+  AlreadyRunningError,
+  MultiRpcClient,
+  SingleInstanceLock,
+  logger,
+  redactUrl,
+  setLogLevel,
+} from '@areal/bots-shared';
 
 import { CheckpointStore } from './checkpoint.js';
 import { loadConfig } from './config.js';
-import { logger, setLogLevel } from './logger.js';
-import { SingleFlightLock, runLoop, subscribeRevenueDistributed } from './crank.js';
+import {
+  SingleFlightLock,
+  reconcileSinceLastSeen,
+  runLoop,
+  subscribeRevenueDistributed,
+} from './crank.js';
 
 /**
  * convert-and-fund-crank entrypoint.
@@ -12,6 +23,12 @@ import { SingleFlightLock, runLoop, subscribeRevenueDistributed } from './crank.
  * predecessor crank — revenue-crank — fires distribute_revenue which moves
  * USDC into the per-OT Accumulator ATA). It then builds the per-OT
  * convert_to_rwt TX with ComputeBudget(300_000) per D5.
+ *
+ * Substep 9 wired in the shared hardening primitives:
+ *   - R29: {@link MultiRpcClient} replaces single-RPC `Connection`.
+ *   - R30: {@link SingleInstanceLock} guards against duplicate instances.
+ *   - R31: {@link reconcileEvents} replays missed events on startup + after
+ *     WS reconnects, bounded by the persisted `last_seen_slot`.
  *
  * NOTE: For Layer 8 this entrypoint emits SEND decisions but does not
  * automatically send the full TX yet — the dynamic-account assembly
@@ -27,7 +44,7 @@ async function main(): Promise<void> {
 
   logger.info('convert-and-fund-crank starting', {
     network: cfg.network,
-    rpc: cfg.rpcUrl,
+    rpcs: cfg.rpcEndpoints.map(e => redactUrl(e.url)),
     crank: cfg.crankKeypair.publicKey.toBase58(),
     ydProgram: cfg.ydProgramId.toBase58(),
     dexProgram: cfg.dexProgramId.toBase58(),
@@ -54,30 +71,57 @@ async function main(): Promise<void> {
     );
   }
 
-  const conn = new Connection(cfg.rpcUrl, {
-    commitment: 'confirmed',
-    wsEndpoint: cfg.rpcWsUrl,
-  });
+  const client = new MultiRpcClient(cfg.rpcEndpoints, { commitment: 'confirmed' });
 
   try {
-    const height = await conn.getBlockHeight('confirmed');
+    const height = await client.withFallback(c => c.getBlockHeight('confirmed'));
     logger.info('RPC OK', { blockHeight: height });
   } catch (err) {
     throw new Error(
-      `RPC unreachable at ${cfg.rpcUrl}: ${err instanceof Error ? err.message : String(err)}`,
+      `convert-and-fund-crank: no RPC reachable: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
+  const lock = new SingleInstanceLock();
+  try {
+    await lock.acquire({
+      lockDir: cfg.lockDir,
+      instanceId: 'convert-and-fund-crank',
+    });
+  } catch (err) {
+    if (err instanceof AlreadyRunningError) {
+      logger.error(
+        'convert-and-fund-crank: another instance is already running',
+        err,
+        { pid: err.pid, startedAt: err.startedAt },
+      );
+    }
+    throw err;
+  }
+
+  const conn = client.primary();
+
   const checkpoint = new CheckpointStore(cfg.dbPath);
-  const lock = new SingleFlightLock();
+  const dedupe = new SingleFlightLock();
 
   const stopController = new AbortController();
+
+  // R31: catch up on signatures we may have missed across restarts / WS gaps.
+  reconcileSinceLastSeen({
+    client,
+    cfg,
+    checkpoint,
+    lock: dedupe,
+    signal: stopController.signal,
+  }).catch(err => {
+    logger.error('startup reconcile failed', err);
+  });
 
   const wsSub = subscribeRevenueDistributed({
     conn,
     cfg,
     checkpoint,
-    lock,
+    lock: dedupe,
     otProgramId: cfg.otProgramId,
   });
 
@@ -97,6 +141,11 @@ async function main(): Promise<void> {
     } catch (e) {
       logger.error('checkpoint close failed', e);
     }
+    try {
+      await lock.release();
+    } catch (e) {
+      logger.error('lock release failed', e);
+    }
     logger.info('shutdown complete');
     process.exit(exitCode);
   };
@@ -112,7 +161,7 @@ async function main(): Promise<void> {
   });
 
   try {
-    await runLoop({ conn, cfg, checkpoint, lock, signal: stopController.signal });
+    await runLoop({ conn, cfg, checkpoint, lock: dedupe, signal: stopController.signal });
   } catch (err) {
     logger.error('runLoop crashed', err);
     void shutdown('crash', 1);

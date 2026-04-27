@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { ComputeBudgetProgram, PublicKey, Keypair } from '@solana/web3.js';
 
 import { CheckpointStore } from '../src/checkpoint.js';
+import { parseRpcEndpoints } from '../src/config.js';
 import { decideConvert, SingleFlightLock } from '../src/crank.js';
 import {
   buildConvertToRwtIx,
@@ -329,5 +330,46 @@ describe('parsePoolSnapshot', () => {
     expect(pool!.reserveB).toBe(789_012n);
     expect(pool!.feeBps).toBe(25);
     expect(pool!.isActive).toBe(true);
+  });
+});
+
+describe('parseRpcEndpoints (R29 integration)', () => {
+  it('parses a single tuple with all fields', () => {
+    const eps = parseRpcEndpoints('https://primary|wss://primary|100');
+    expect(eps).toHaveLength(1);
+    expect(eps[0]!.url).toBe('https://primary');
+    expect(eps[0]!.wsUrl).toBe('wss://primary');
+    expect(eps[0]!.weight).toBe(100);
+  });
+
+  it('rejects empty input and malformed weights', () => {
+    expect(() => parseRpcEndpoints('')).toThrow();
+    expect(() => parseRpcEndpoints('https://a|wss://a|abc')).toThrow();
+  });
+});
+
+describe('CheckpointStore reconcile state (R31 integration)', () => {
+  let dbPath: string;
+  let store: CheckpointStore;
+
+  beforeEach(() => {
+    dbPath = path.join(os.tmpdir(), `convert-rec-${Date.now()}-${Math.random()}.db`);
+    store = new CheckpointStore(dbPath);
+  });
+
+  afterEach(() => {
+    try { store.close(); } catch { /* noop */ }
+    try { fs.unlinkSync(dbPath); } catch { /* noop */ }
+  });
+
+  it('returns null for unseen programs and round-trips highest slot monotonically', () => {
+    expect(store.getLastSeenSlot('PROG_AAA')).toBeNull();
+    store.setLastSeenSlot('PROG_AAA', 1_000);
+    expect(store.getLastSeenSlot('PROG_AAA')).toBe(1_000);
+    store.setLastSeenSlot('PROG_AAA', 1_500);
+    expect(store.getLastSeenSlot('PROG_AAA')).toBe(1_500);
+    // Going backwards must NOT regress.
+    store.setLastSeenSlot('PROG_AAA', 800);
+    expect(store.getLastSeenSlot('PROG_AAA')).toBe(1_500);
   });
 });

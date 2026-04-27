@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { ProofSource } from './config.js';
 import type { ProofFile } from './types.js';
-import { logger } from './logger.js';
+import { logger } from '@areal/bots-shared';
 
 /**
  * Read a Merkle proof file emitted by the merkle-publisher proof store.

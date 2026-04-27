@@ -3,19 +3,25 @@ import * as fs from 'node:fs';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import { z } from 'zod';
 
+import type { RpcEndpoint } from '@areal/bots-shared';
+
 const NetworkSchema = z.enum(['devnet', 'mainnet']);
 const LogLevelSchema = z.enum(['debug', 'info', 'warn', 'error']);
 
 const EnvSchema = z.object({
   NETWORK: NetworkSchema.default('devnet'),
-  RPC_URL: z.string().url().default('https://api.devnet.solana.com'),
-  RPC_WS_URL: z.string().default('wss://api.devnet.solana.com'),
+  /** Pipe-separated RPC tuple list: `<http>|<ws>|<weight>`, comma-separated. */
+  RPC_URLS: z
+    .string()
+    .min(1)
+    .default('https://api.devnet.solana.com|wss://api.devnet.solana.com|100'),
 
   REVENUE_CRANK_KEYPAIR_PATH: z.string().min(1),
 
   OT_PROGRAM_ID: z.string().min(32),
   OT_PROJECTS: z.string().default(''),
 
+  LOCK_DIR: z.string().default('./data/locks'),
   DB_PATH: z.string().default('./data/checkpoint.db'),
   CHECK_INTERVAL_SECS: z.coerce.number().int().positive().default(3600),
 
@@ -27,8 +33,7 @@ export type LogLevel = z.infer<typeof LogLevelSchema>;
 
 export interface BotConfig {
   network: Network;
-  rpcUrl: string;
-  rpcWsUrl: string;
+  rpcEndpoints: RpcEndpoint[];
 
   crankKeypair: Keypair;
   crankKeypairPath: string;
@@ -36,6 +41,7 @@ export interface BotConfig {
   otProgramId: PublicKey;
   otProjects: PublicKey[];
 
+  lockDir: string;
   dbPath: string;
   checkIntervalSecs: number;
 
@@ -69,6 +75,39 @@ function loadKeypairFromFile(path: string): Keypair {
   return Keypair.fromSecretKey(Uint8Array.from(raw as number[]));
 }
 
+/**
+ * Parse the `RPC_URLS` env var into a list of {@link RpcEndpoint}s.
+ *
+ * Format: comma-separated tuples of `<httpUrl>|<wsUrl>|<weight>`. The WS URL
+ * and weight are optional. Mirrors the helper in nexus-manager/src/config.ts
+ * to keep cranks environment-compatible.
+ */
+export function parseRpcEndpoints(raw: string): RpcEndpoint[] {
+  const parts = raw
+    .split(',')
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+  if (parts.length === 0) {
+    throw new Error('RPC_URLS must contain at least one endpoint');
+  }
+  return parts.map((tuple, i) => {
+    const [httpUrl, wsUrl, weightStr] = tuple.split('|').map(s => s?.trim());
+    if (!httpUrl) {
+      throw new Error(`RPC_URLS[${i}]: missing HTTP url in "${tuple}"`);
+    }
+    const weight = weightStr ? Number.parseInt(weightStr, 10) : 1;
+    if (!Number.isFinite(weight) || weight <= 0) {
+      throw new Error(`RPC_URLS[${i}]: invalid weight "${weightStr}"`);
+    }
+    return {
+      url: httpUrl,
+      wsUrl: wsUrl && wsUrl.length > 0 ? wsUrl : undefined,
+      weight,
+      failureCount: 0,
+    };
+  });
+}
+
 export function loadConfig(): BotConfig {
   const raw = EnvSchema.parse(process.env);
 
@@ -94,10 +133,11 @@ export function loadConfig(): BotConfig {
 
   const crankKeypair = loadKeypairFromFile(raw.REVENUE_CRANK_KEYPAIR_PATH);
 
+  const rpcEndpoints = parseRpcEndpoints(raw.RPC_URLS);
+
   return {
     network: raw.NETWORK,
-    rpcUrl: raw.RPC_URL,
-    rpcWsUrl: raw.RPC_WS_URL,
+    rpcEndpoints,
 
     crankKeypair,
     crankKeypairPath: raw.REVENUE_CRANK_KEYPAIR_PATH,
@@ -105,6 +145,7 @@ export function loadConfig(): BotConfig {
     otProgramId,
     otProjects,
 
+    lockDir: raw.LOCK_DIR,
     dbPath: raw.DB_PATH,
     checkIntervalSecs: raw.CHECK_INTERVAL_SECS,
 

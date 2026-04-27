@@ -1,8 +1,14 @@
-import { Connection } from '@solana/web3.js';
+import {
+  AlreadyRunningError,
+  MultiRpcClient,
+  SingleInstanceLock,
+  logger,
+  redactUrl,
+  setLogLevel,
+} from '@areal/bots-shared';
 
 import { CheckpointStore } from './checkpoint.js';
 import { loadConfig } from './config.js';
-import { logger, setLogLevel } from './logger.js';
 import { ProofFetcher } from './proof-fetcher.js';
 import { SingleFlightLock, runLoop, subscribeRootPublished } from './crank.js';
 
@@ -13,6 +19,11 @@ import { SingleFlightLock, runLoop, subscribeRootPublished } from './crank.js';
  * three claim flows (vault, pool, treasury) for every configured target. The
  * proof source is either a shared filesystem directory written by the
  * merkle-publisher, or an HTTP endpoint exposing the same JSON layout.
+ *
+ * Layer 9 Substep 9 wired in the shared hardening primitives:
+ *   - R29: {@link MultiRpcClient} replaces single-RPC `Connection`.
+ *   - R30: {@link SingleInstanceLock} guards against duplicate instances.
+ *   - R31: handled at WS subscriber layer (see `subscribeRootPublished`).
  *
  * For Layer 8, dynamic-account assembly (rwt_claim_ata, liquidity_dest, etc.)
  * is intentionally deferred — the bot runs decisions, logs them, and updates
@@ -26,7 +37,7 @@ async function main(): Promise<void> {
 
   logger.info('yield-claim-crank starting', {
     network: cfg.network,
-    rpc: cfg.rpcUrl,
+    rpcs: cfg.rpcEndpoints.map(e => redactUrl(e.url)),
     crank: cfg.crankKeypair.publicKey.toBase58(),
     ydProgram: cfg.ydProgramId.toBase58(),
     rwtEngineProgram: cfg.rwtEngineProgramId.toBase58(),
@@ -45,25 +56,42 @@ async function main(): Promise<void> {
     );
   }
 
-  const conn = new Connection(cfg.rpcUrl, {
-    commitment: 'confirmed',
-    wsEndpoint: cfg.rpcWsUrl,
-  });
+  const client = new MultiRpcClient(cfg.rpcEndpoints, { commitment: 'confirmed' });
+
   try {
-    const height = await conn.getBlockHeight('confirmed');
+    const height = await client.withFallback(c => c.getBlockHeight('confirmed'));
     logger.info('RPC OK', { blockHeight: height });
   } catch (err) {
     throw new Error(
-      `RPC unreachable at ${cfg.rpcUrl}: ${err instanceof Error ? err.message : String(err)}`,
+      `yield-claim-crank: no RPC reachable: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
+  const lock = new SingleInstanceLock();
+  try {
+    await lock.acquire({
+      lockDir: cfg.lockDir,
+      instanceId: 'yield-claim-crank',
+    });
+  } catch (err) {
+    if (err instanceof AlreadyRunningError) {
+      logger.error(
+        'yield-claim-crank: another instance is already running',
+        err,
+        { pid: err.pid, startedAt: err.startedAt },
+      );
+    }
+    throw err;
+  }
+
+  const conn = client.primary();
+
   const checkpoint = new CheckpointStore(cfg.dbPath);
   const fetcher = new ProofFetcher(cfg.proofSource);
-  const lock = new SingleFlightLock();
+  const dedupe = new SingleFlightLock();
 
   const stopController = new AbortController();
-  const wsSub = subscribeRootPublished({ conn, cfg, checkpoint, fetcher, lock });
+  const wsSub = subscribeRootPublished({ conn, cfg, checkpoint, fetcher, lock: dedupe });
 
   let alreadyShuttingDown = false;
   const shutdown = async (signal: string, exitCode = 0): Promise<void> => {
@@ -80,6 +108,11 @@ async function main(): Promise<void> {
       checkpoint.close();
     } catch (e) {
       logger.error('checkpoint close failed', e);
+    }
+    try {
+      await lock.release();
+    } catch (e) {
+      logger.error('lock release failed', e);
     }
     logger.info('shutdown complete');
     process.exit(exitCode);
@@ -101,7 +134,7 @@ async function main(): Promise<void> {
       cfg,
       checkpoint,
       fetcher,
-      lock,
+      lock: dedupe,
       signal: stopController.signal,
     });
   } catch (err) {

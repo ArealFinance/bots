@@ -5,6 +5,12 @@ import {
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
 
+import {
+  MultiRpcClient,
+  logger,
+  reconcileEvents,
+} from '@areal/bots-shared';
+
 import type { BotConfig } from './config.js';
 import type { CheckpointStore, ClaimKind } from './checkpoint.js';
 import type { ClaimDecision, ProofFile } from './types.js';
@@ -24,7 +30,6 @@ import {
   deriveRwtDistConfigPda,
   deriveRwtVaultPda,
 } from './pdas.js';
-import { logger } from './logger.js';
 
 /**
  * yield-claim-crank main loop.
@@ -482,11 +487,14 @@ export function subscribeRootPublished(args: {
   fetcher: ProofFetcher;
   lock: SingleFlightLock;
 }): { unsubscribe: () => Promise<void> } {
-  const { conn, cfg } = args;
+  const { conn, cfg, checkpoint } = args;
   const subId = conn.onLogs(
     cfg.ydProgramId,
-    async logs => {
+    async (logs, ctx) => {
       if (logs.err) return;
+      // Track the highest seen slot so reconcile after a reconnect can pick
+      // up where the live subscription left off.
+      checkpoint.setLastSeenSlot(cfg.ydProgramId.toBase58(), ctx?.slot ?? 0);
       try {
         await runClaimCycle(args);
       } catch (err) {
@@ -501,6 +509,44 @@ export function subscribeRootPublished(args: {
       await conn.removeOnLogsListener(subId);
     },
   };
+}
+
+/**
+ * R31: walk YD program signatures since the last-seen slot and re-run the
+ * claim cycle for every dispatched event. Called once at startup and on
+ * every WS reconnect path. Idempotent — `runClaimCycle` re-reads chain
+ * state and on-chain ClaimStatus enforces strict-greater-than-cumulative.
+ */
+export async function reconcileSinceLastSeen(args: {
+  client: MultiRpcClient;
+  cfg: BotConfig;
+  checkpoint: CheckpointStore;
+  fetcher: ProofFetcher;
+  lock: SingleFlightLock;
+  signal?: AbortSignal;
+}): Promise<number> {
+  const { client, cfg, checkpoint, fetcher, lock, signal } = args;
+  const programKey = cfg.ydProgramId.toBase58();
+  const fromSlot = checkpoint.getLastSeenSlot(programKey);
+  if (fromSlot === null) {
+    logger.info('reconcile skipped — no prior checkpoint slot', { programId: programKey });
+    return 0;
+  }
+  return await client.withFallback(conn =>
+    reconcileEvents(
+      conn,
+      { programId: cfg.ydProgramId, fromSlot, signal },
+      async ({ slot }) => {
+        if (signal?.aborted) return;
+        try {
+          await runClaimCycle({ conn, cfg, checkpoint, fetcher, lock });
+        } catch (err) {
+          logger.error('reconcile-triggered runClaimCycle failed', err);
+        }
+        checkpoint.setLastSeenSlot(programKey, slot);
+      },
+    ),
+  );
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {

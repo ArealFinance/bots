@@ -1,5 +1,11 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 
+import {
+  MultiRpcClient,
+  logger,
+  reconcileEvents,
+} from '@areal/bots-shared';
+
 import type { BotConfig } from './config.js';
 import type { CheckpointStore } from './checkpoint.js';
 import type { ConvertContext, ConvertDecision } from './types.js';
@@ -12,7 +18,6 @@ import {
   fetchTokenAmount,
 } from './readers.js';
 import { chooseRoute } from './slippage.js';
-import { logger } from './logger.js';
 
 /**
  * Single-flight lock per OT — same shape as revenue-crank's. WS callback and
@@ -256,8 +261,11 @@ export function subscribeRevenueDistributed(args: {
   const { conn, cfg, checkpoint, lock, otProgramId } = args;
   const subId = conn.onLogs(
     otProgramId,
-    async logs => {
+    async (logs, ctx) => {
       if (logs.err) return;
+      // Track the highest seen slot so reconcile after a reconnect can pick
+      // up where the live subscription left off.
+      checkpoint.setLastSeenSlot(otProgramId.toBase58(), ctx?.slot ?? 0);
       for (const ot of cfg.otProjects) {
         const key = ot.toBase58();
         if (!lock.acquire(key)) continue;
@@ -278,6 +286,52 @@ export function subscribeRevenueDistributed(args: {
       await conn.removeOnLogsListener(subId);
     },
   };
+}
+
+/**
+ * R31: walk OT program signatures since the last-seen slot and re-dispatch
+ * any missed RevenueDistributed events through `processOt`. Called once at
+ * startup and on every WS reconnect path. Idempotent — `processOt` always
+ * re-reads chain state and on-chain `convert_to_rwt` is itself idempotent
+ * when the Accumulator USDC ATA is empty.
+ */
+export async function reconcileSinceLastSeen(args: {
+  client: MultiRpcClient;
+  cfg: BotConfig;
+  checkpoint: CheckpointStore;
+  lock: SingleFlightLock;
+  signal?: AbortSignal;
+}): Promise<number> {
+  const { client, cfg, checkpoint, lock, signal } = args;
+  const programKey = cfg.otProgramId.toBase58();
+  const fromSlot = checkpoint.getLastSeenSlot(programKey);
+  if (fromSlot === null) {
+    logger.info('reconcile skipped — no prior checkpoint slot', { programId: programKey });
+    return 0;
+  }
+  return await client.withFallback(conn =>
+    reconcileEvents(
+      conn,
+      { programId: cfg.otProgramId, fromSlot, signal },
+      async ({ slot }) => {
+        // Re-walk every configured OT (matches the WS handler — we don't
+        // parse event payloads, just trigger a fresh chain read per OT).
+        for (const ot of cfg.otProjects) {
+          if (signal?.aborted) return;
+          const key = ot.toBase58();
+          if (!lock.acquire(key)) continue;
+          try {
+            await processOt({ conn, cfg, checkpoint, otMint: ot });
+          } catch (e) {
+            logger.error('reconcile-triggered processOt failed', e, { ot: key });
+          } finally {
+            lock.release(key);
+          }
+        }
+        checkpoint.setLastSeenSlot(programKey, slot);
+      },
+    ),
+  );
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {

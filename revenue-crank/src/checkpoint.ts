@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { logger } from './logger.js';
+import { logger } from '@areal/bots-shared';
 
 /**
  * SQLite checkpoint store for the revenue crank (D9).
@@ -50,7 +50,40 @@ export class CheckpointStore {
         last_signature       TEXT,
         updated_at           INTEGER NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS revenue_reconcile_state (
+        program_id      TEXT NOT NULL PRIMARY KEY,
+        last_seen_slot  INTEGER NOT NULL DEFAULT 0,
+        updated_at      INTEGER NOT NULL
+      );
     `);
+  }
+
+  /**
+   * Highest slot we've already dispatched events for via WS or reconcile.
+   * Used by R31 `reconcileEvents()` to bound the catch-up scan on startup +
+   * after WS reconnects. Returns `null` if the bot has never reconciled.
+   */
+  getLastSeenSlot(programId: string): number | null {
+    const row = this.db
+      .prepare(
+        `SELECT last_seen_slot FROM revenue_reconcile_state WHERE program_id = ?`,
+      )
+      .get(programId) as { last_seen_slot: number } | undefined;
+    return row ? row.last_seen_slot : null;
+  }
+
+  /** Persist the highest slot dispatched for a given programId. */
+  setLastSeenSlot(programId: string, slot: number): void {
+    const now = Math.floor(Date.now() / 1000);
+    this.db
+      .prepare(
+        `INSERT INTO revenue_reconcile_state (program_id, last_seen_slot, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(program_id) DO UPDATE SET
+           last_seen_slot = MAX(excluded.last_seen_slot, revenue_reconcile_state.last_seen_slot),
+           updated_at     = excluded.updated_at`,
+      )
+      .run(programId, slot, now);
   }
 
   get(otMint: string): CheckpointRow | null {

@@ -3,13 +3,18 @@ import * as fs from 'node:fs';
 import { Keypair, PublicKey } from '@solana/web3.js';
 import { z } from 'zod';
 
+import type { RpcEndpoint } from '@areal/bots-shared';
+
 const NetworkSchema = z.enum(['devnet', 'mainnet']);
 const LogLevelSchema = z.enum(['debug', 'info', 'warn', 'error']);
 
 const EnvSchema = z.object({
   NETWORK: NetworkSchema.default('devnet'),
-  RPC_URL: z.string().url().default('https://api.devnet.solana.com'),
-  RPC_WS_URL: z.string().default('wss://api.devnet.solana.com'),
+  /** Pipe-separated RPC tuple list: `<http>|<ws>|<weight>`, comma-separated. */
+  RPC_URLS: z
+    .string()
+    .min(1)
+    .default('https://api.devnet.solana.com|wss://api.devnet.solana.com|100'),
 
   YIELD_CLAIM_CRANK_KEYPAIR_PATH: z.string().min(1),
 
@@ -31,6 +36,7 @@ const EnvSchema = z.object({
   COMPUTE_UNIT_LIMIT: z.coerce.number().int().positive().default(150_000),
   COMPUTE_UNIT_PRICE_MICROLAMPORTS: z.coerce.number().int().nonnegative().default(10_000),
 
+  LOCK_DIR: z.string().default('./data/locks'),
   DB_PATH: z.string().default('./data/checkpoint.db'),
 
   LOG_LEVEL: LogLevelSchema.default('info'),
@@ -45,8 +51,7 @@ export type ProofSource =
 
 export interface BotConfig {
   network: Network;
-  rpcUrl: string;
-  rpcWsUrl: string;
+  rpcEndpoints: RpcEndpoint[];
 
   crankKeypair: Keypair;
   crankKeypairPath: string;
@@ -68,6 +73,7 @@ export interface BotConfig {
   computeUnitLimit: number;
   computeUnitPriceMicroLamports: number;
 
+  lockDir: string;
   dbPath: string;
   logLevel: LogLevel;
 }
@@ -89,6 +95,39 @@ function pubkeyOrThrow(s: string, name: string): PublicKey {
   } catch {
     throw new Error(`${name}: invalid pubkey "${s}"`);
   }
+}
+
+/**
+ * Parse the `RPC_URLS` env var into a list of {@link RpcEndpoint}s.
+ *
+ * Format: comma-separated tuples of `<httpUrl>|<wsUrl>|<weight>`. The WS URL
+ * and weight are optional. Mirrors the helper in nexus-manager/src/config.ts
+ * to keep cranks environment-compatible.
+ */
+export function parseRpcEndpoints(raw: string): RpcEndpoint[] {
+  const parts = raw
+    .split(',')
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+  if (parts.length === 0) {
+    throw new Error('RPC_URLS must contain at least one endpoint');
+  }
+  return parts.map((tuple, i) => {
+    const [httpUrl, wsUrl, weightStr] = tuple.split('|').map(s => s?.trim());
+    if (!httpUrl) {
+      throw new Error(`RPC_URLS[${i}]: missing HTTP url in "${tuple}"`);
+    }
+    const weight = weightStr ? Number.parseInt(weightStr, 10) : 1;
+    if (!Number.isFinite(weight) || weight <= 0) {
+      throw new Error(`RPC_URLS[${i}]: invalid weight "${weightStr}"`);
+    }
+    return {
+      url: httpUrl,
+      wsUrl: wsUrl && wsUrl.length > 0 ? wsUrl : undefined,
+      weight,
+      failureCount: 0,
+    };
+  });
 }
 
 export function loadConfig(): BotConfig {
@@ -114,10 +153,11 @@ export function loadConfig(): BotConfig {
     throw new Error('one of PROOF_DIR or PROOF_BASE_URL must be set');
   }
 
+  const rpcEndpoints = parseRpcEndpoints(raw.RPC_URLS);
+
   return {
     network: raw.NETWORK,
-    rpcUrl: raw.RPC_URL,
-    rpcWsUrl: raw.RPC_WS_URL,
+    rpcEndpoints,
 
     crankKeypair: loadKeypair(raw.YIELD_CLAIM_CRANK_KEYPAIR_PATH),
     crankKeypairPath: raw.YIELD_CLAIM_CRANK_KEYPAIR_PATH,
@@ -139,6 +179,7 @@ export function loadConfig(): BotConfig {
     computeUnitLimit: raw.COMPUTE_UNIT_LIMIT,
     computeUnitPriceMicroLamports: raw.COMPUTE_UNIT_PRICE_MICROLAMPORTS,
 
+    lockDir: raw.LOCK_DIR,
     dbPath: raw.DB_PATH,
     logLevel: raw.LOG_LEVEL,
   };
