@@ -45,6 +45,18 @@ yield-claim-crank/*.db-journal
 yield-claim-crank/*.db-wal
 yield-claim-crank/*.db-shm
 
+# Layer 10 substep 2 — pool-rebalancer + nexus-manager runtime state
+pool-rebalancer/data/
+pool-rebalancer/*.db
+pool-rebalancer/*.db-journal
+pool-rebalancer/*.db-wal
+pool-rebalancer/*.db-shm
+nexus-manager/data/
+nexus-manager/*.db
+nexus-manager/*.db-journal
+nexus-manager/*.db-wal
+nexus-manager/*.db-shm
+
 # Shared package build output
 shared/dist/
 shared/*.tsbuildinfo
