@@ -1,5 +1,12 @@
 # Pool Rebalancer
 
+## Layer 10 status
+
+- **State:** active (live via `scripts/lib/start-bots.ts`).
+- **Single-instance lock:** `proper-lockfile` flock (R30).
+- **On-chain liveness probe:** verified via `PoolState` account read; the orchestrator dwells past the heartbeat threshold and asserts the spawned PID is still alive before declaring Phase 8 complete.
+- **Heartbeat:** to dashboard System Overview (Layer 10 Substep 9).
+
 Keeps the Areal Native DEX concentrated-liquidity pools active by shifting bin ranges around the current NAV (Net Asset Value) when price drifts outside the active window.
 
 ## What it does

@@ -2,15 +2,32 @@
 
 Off-chain services that keep the [Areal Finance](https://areal.finance) protocol running. Each bot is a standalone TypeScript + Node.js service.
 
-| Bot | State | Role |
-|---|---|---|
-| [`merkle-publisher`](./merkle-publisher) | active | Builds yield distribution Merkle roots, publishes on-chain, serves claim proofs |
-| [`pool-rebalancer`](./pool-rebalancer) | active | Keeps concentrated-liquidity pools active by shifting bins around current price |
-| [`revenue-crank`](./revenue-crank) | active | Triggers `OT::distribute_revenue` per-OT once revenue ATA passes the min-distribution threshold and the cooldown has elapsed |
-| [`convert-and-fund-crank`](./convert-and-fund-crank) | decision-only (Layer 8 Step 7) | Computes route + slippage + checkpoint state for `YD::convert_to_rwt` and exports TX builders. Live TX submission requires dynamic on-chain readers (DistributionConfig, MerkleDistributor, RwtVault accounts, master pool vaults) wired in Layer 8 Step 10 E2E |
-| [`yield-claim-crank`](./yield-claim-crank) | decision-only (Layer 8 Step 7) | Computes claim decisions per-epoch + fetches proofs from Merkle Publisher store and exports TX builders for `RWT::claim_yield` / `DEX::compound_yield` / `OT::claim_yd_for_treasury`. Live submission lands in Layer 8 Step 10 E2E |
+| Bot | Description | State | Lockfile | Heartbeat |
+|---|---|---|---|---|
+| [`merkle-publisher`](./merkle-publisher) | Builds yield distribution Merkle roots, publishes on-chain, serves claim proofs | ✅ active | `proper-lockfile` (R30) | dashboard System Overview |
+| [`pool-rebalancer`](./pool-rebalancer) | Keeps concentrated-liquidity pools active by shifting bins around the current price | ✅ active | `proper-lockfile` (R30) | dashboard System Overview |
+| [`revenue-crank`](./revenue-crank) | Triggers `OT::distribute_revenue` per-OT once the revenue ATA passes the min-distribution threshold and the cooldown has elapsed | ✅ active | `proper-lockfile` (R30) | dashboard System Overview |
+| [`convert-and-fund-crank`](./convert-and-fund-crank) | Triggers `YD::convert_to_rwt` per-OT (atomic USDC swap → mint → fee/vault split) once the Accumulator USDC ATA exceeds `MIN_CONVERT_USDC` | ✅ active | `proper-lockfile` (R30) | dashboard System Overview |
+| [`yield-claim-crank`](./yield-claim-crank) | Submits the three Layer 8 claim flows (`RWT::claim_yield`, `DEX::compound_yield`, `OT::claim_yd_for_treasury`) once a fresh Merkle root publishes | ✅ active | `proper-lockfile` (R30) | dashboard System Overview |
+| [`nexus-manager`](./nexus-manager) | Manager-gated bot for the LiquidityNexus singleton; submits `nexus_swap` / `nexus_add_liquidity` / `nexus_remove_liquidity` per the V1 decision policy | ✅ active | `proper-lockfile` (R30) | dashboard System Overview |
 
-Planned (not yet implemented): Nexus manager (Layer 9).
+## Bootstrap orchestration (Layer 10)
+
+`scripts/lib/start-bots.ts` is invoked from Phase 8 of `scripts/deploy.sh` and spawns the 6 bots in a fixed ordering (per the Phase 8 startup-ordering rules):
+
+1. `pool-rebalancer` — independent of the publisher.
+2. `merkle-publisher` — must publish the first on-chain root.
+3. **on-chain liveness probe** — orchestrator blocks until the YD `MerkleDistributor.merkle_root` field is non-zero (timeout `FIRST_ROOT_TIMEOUT_MS`, default 10 min); failure aborts Phase 8.
+4. `revenue-crank`.
+5. `convert-and-fund-crank`.
+6. `yield-claim-crank` — depends on a published merkle root.
+7. `nexus-manager` — last so the rest of the fleet is up before the LP scheduler starts placing swaps.
+
+Each bot acquires a `proper-lockfile` flock at startup (R30 single-instance enforcement); a second copy aborts immediately with `AlreadyRunningError`. Stale locks (>60 s with a dead PID) are auto-reclaimed.
+
+Phase 8 completes only after the heartbeat dwell verifies every spawned PID is still alive AND the on-chain liveness probe for the publisher passed.
+
+See [`docs.areal.finance/architecture/layer10-bootstrap`](https://docs.areal.finance/architecture/layer10-bootstrap) and [`docs.areal.finance/bots/off-chain-services`](https://docs.areal.finance/bots/off-chain-services) for the operator walkthrough.
 
 ## Yield-flow overview
 

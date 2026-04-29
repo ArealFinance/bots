@@ -1,5 +1,12 @@
 # merkle-publisher
 
+## Layer 10 status
+
+- **State:** active (live via `scripts/lib/start-bots.ts`).
+- **Single-instance lock:** `proper-lockfile` flock (R30).
+- **On-chain liveness probe:** YD `MerkleDistributor.merkle_root` field at byte offset 104 transitions from all-zero to non-zero on the first publish; the deploy orchestrator blocks Phase 8 until this is observed.
+- **Heartbeat:** to dashboard System Overview (Layer 10 Substep 9).
+
 Off-chain bot for **Layer 7 — Yield Distribution**. Watches `DistributorFunded` /
 `StreamConverted` events, snapshots OT holder balances at the fund slot, and
 publishes a per-deposit cumulative merkle root on-chain every 10 minutes.

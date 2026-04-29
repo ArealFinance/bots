@@ -32,7 +32,8 @@
  */
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -386,4 +387,215 @@ test('parity withdraw_liquidity_holding: gated R20 (placeholder)', () => {
   // No-op until R20 ships a crank-side builder. Documenting the intent here
   // so the next pass adds a byte-equivalence check without a missing test.
   assert.ok(true, 'gated R20 — see internal Layer 9 decisions doc');
+});
+
+// ============================================================================
+// R-62 — builder fingerprint drift detector.
+//
+// The byte-equivalence checks above pin (crank, dashboard) parity per-ix.
+// They DON'T detect when the inlined byte-mirror builders here drift on
+// their own — e.g. someone reorders keys[] and updates BOTH branches at
+// once, masking a regression. The fingerprint table catches this:
+//
+//   For each (ix-name, programId, keys[], data) we compute a deterministic
+//   SHA-256 over a canonical encoding and compare to the value pinned in
+//   bots/.e2e/fixtures/builder-fingerprints.json. Any drift fails CI with
+//   a "BUILDER DRIFT" message indicating which ix's fingerprint changed.
+//
+// To regenerate the fingerprint fixture (after an INTENTIONAL builder
+// change), run with `BUILDER_FINGERPRINT_CAPTURE=1` — the test writes the
+// observed SHAs back to the JSON file and passes for that one run.
+// Subsequent runs re-assert against the new pinned values.
+// ============================================================================
+
+const FINGERPRINT_PATH = resolve(__dirname, 'fixtures', 'builder-fingerprints.json');
+
+interface IxFingerprintInputs {
+  programId: PublicKey;
+  data: Buffer;
+  keys: ReadonlyArray<{ pubkey: PublicKey; isSigner: boolean; isWritable: boolean }>;
+}
+
+function fingerprintIx(name: string, ix: IxFingerprintInputs): string {
+  // Canonical encoding: name || 0x00 || programId(32) || data.len(u32-le)
+  // || data || keys.len(u32-le) || foreach (pubkey(32) || flags(u8)).
+  const hash = createHash('sha256');
+  hash.update(name, 'utf8');
+  hash.update(Buffer.alloc(1, 0));
+  hash.update(ix.programId.toBuffer());
+  const dataLen = Buffer.alloc(4);
+  dataLen.writeUInt32LE(ix.data.length, 0);
+  hash.update(dataLen);
+  hash.update(ix.data);
+  const keysLen = Buffer.alloc(4);
+  keysLen.writeUInt32LE(ix.keys.length, 0);
+  hash.update(keysLen);
+  for (const k of ix.keys) {
+    hash.update(k.pubkey.toBuffer());
+    const flags = (k.isSigner ? 1 : 0) | (k.isWritable ? 2 : 0);
+    hash.update(Buffer.from([flags]));
+  }
+  return hash.digest('hex');
+}
+
+async function buildAllFingerprints(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+
+  // convert_to_rwt
+  {
+    const args: BuildConvertArgs = {
+      ydProgramId: pk('yd_program'),
+      dexProgramId: pk('dex_program'),
+      rwtEngineProgramId: pk('rwt_engine_program'),
+      crank: pk('signer'),
+      otMint: pk('ot_mint'),
+      accumulatorUsdcAta: pk('accumulator_usdc_ata'),
+      accumulatorRwtAta: pk('accumulator_rwt_ata'),
+      feeAccount: pk('fee_account'),
+      rewardVault: pk('yd_reward_vault'),
+      rwtMint: pk('rwt_mint'),
+      dexConfig: pk('dex_config'),
+      poolState: pk('dex_pool_state'),
+      dexPoolVaultIn: pk('dex_pool_vault_in'),
+      dexPoolVaultOut: pk('dex_pool_vault_out'),
+      dexArealFeeAccount: pk('dex_areal_fee'),
+      rwtCapitalAcc: pk('rwt_capital_acc'),
+      rwtDaoFeeAccount: pk('rwt_dao_fee'),
+      usdcAmount: 1_000_000n,
+      minRwtOut: 999_000n,
+      swapFirst: true,
+    };
+    const built = buildConvertToRwtIx(args);
+    out['convert_to_rwt'] = fingerprintIx('convert_to_rwt', {
+      programId: built.ix.programId,
+      data: Buffer.from(built.ix.data),
+      keys: built.ix.keys,
+    });
+  }
+
+  // claim_yield
+  {
+    const proof = [new Uint8Array(32).fill(0xaa), new Uint8Array(32).fill(0xbb)];
+    const args: BuildRwtClaimArgs = {
+      rwtEngineProgramId: pk('rwt_engine_program'),
+      ydProgramId: pk('yd_program'),
+      crank: pk('signer'),
+      rwtVault: pk('rwt_vault'),
+      distConfig: pk('rwt_dist_config'),
+      rwtClaimAta: pk('rwt_claim_ata'),
+      liquidityDest: pk('liquidity_dest'),
+      protocolRevenueDest: pk('protocol_revenue_dest'),
+      ydConfig: pk('yd_config'),
+      otMint: pk('ot_mint'),
+      ydDistributor: pk('yd_distributor'),
+      ydClaimStatus: pk('yd_claim_status'),
+      ydRewardVault: pk('yd_reward_vault'),
+      cumulativeAmount: 12345n,
+      proof: proof.map((p) => Buffer.from(p)),
+    };
+    const built = buildRwtClaimYieldIx(args);
+    out['claim_yield'] = fingerprintIx('claim_yield', {
+      programId: built.programId,
+      data: Buffer.from(built.data),
+      keys: built.keys,
+    });
+  }
+
+  // compound_yield
+  {
+    const proof = [new Uint8Array(32).fill(0xcc)];
+    const args: BuildDexCompoundArgs = {
+      dexProgramId: pk('dex_program'),
+      ydProgramId: pk('yd_program'),
+      crank: pk('signer'),
+      poolState: pk('dex_pool_state'),
+      targetVault: pk('dex_target_vault'),
+      ydConfig: pk('yd_config'),
+      otMint: pk('ot_mint'),
+      ydDistributor: pk('yd_distributor'),
+      ydClaimStatus: pk('yd_claim_status'),
+      ydRewardVault: pk('yd_reward_vault'),
+      cumulativeAmount: 999n,
+      proof: proof.map((p) => Buffer.from(p)),
+    };
+    const built = buildDexCompoundIx(args);
+    out['compound_yield'] = fingerprintIx('compound_yield', {
+      programId: built.programId,
+      data: Buffer.from(built.data),
+      keys: built.keys,
+    });
+  }
+
+  // claim_yd_for_treasury
+  {
+    const proof = [new Uint8Array(32).fill(0xdd)];
+    const args: BuildOtTreasuryClaimArgs = {
+      otProgramId: pk('ot_program'),
+      ydProgramId: pk('yd_program'),
+      crank: pk('signer'),
+      otMint: pk('ot_mint'),
+      otTreasury: pk('ot_treasury'),
+      treasuryRwtAta: pk('treasury_rwt_ata'),
+      ydConfig: pk('yd_config'),
+      ydOtMint: pk('ot_mint'),
+      ydDistributor: pk('yd_distributor'),
+      ydClaimStatus: pk('yd_claim_status'),
+      ydRewardVault: pk('yd_reward_vault'),
+      cumulativeAmount: 7777n,
+      proof: proof.map((p) => Buffer.from(p)),
+    };
+    const built = buildOtTreasuryClaimIx(args);
+    out['claim_yd_for_treasury'] = fingerprintIx('claim_yd_for_treasury', {
+      programId: built.programId,
+      data: Buffer.from(built.data),
+      keys: built.keys,
+    });
+  }
+
+  return out;
+}
+
+test('R-62 builder fingerprints match pinned fixture (drift detector)', async () => {
+  const observed = await buildAllFingerprints();
+
+  if (process.env.BUILDER_FINGERPRINT_CAPTURE === '1') {
+    // Capture mode — overwrite the pinned fixture and pass. Operators only
+    // run with this env var set after an INTENTIONAL builder change.
+    const sorted = Object.fromEntries(
+      Object.entries(observed).sort(([a], [b]) => a.localeCompare(b)),
+    );
+    const body = JSON.stringify(sorted, null, 2) + '\n';
+    writeFileSync(FINGERPRINT_PATH, body, 'utf8');
+    process.stderr.write(`[R-62] captured ${Object.keys(sorted).length} fingerprints to ${FINGERPRINT_PATH}\n`);
+    return;
+  }
+
+  let pinned: Record<string, string>;
+  try {
+    pinned = JSON.parse(readFileSync(FINGERPRINT_PATH, 'utf8')) as Record<string, string>;
+  } catch (err) {
+    assert.fail(
+      `BUILDER DRIFT: fingerprint fixture missing at ${FINGERPRINT_PATH}. ` +
+        `Run once with BUILDER_FINGERPRINT_CAPTURE=1 to seed it. ` +
+        `(${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+
+  const drift: string[] = [];
+  for (const [ix, hex] of Object.entries(observed)) {
+    if (pinned[ix] !== hex) {
+      drift.push(`  ${ix}: pinned=${pinned[ix] ?? '<missing>'}, observed=${hex}`);
+    }
+  }
+  for (const ix of Object.keys(pinned)) {
+    if (!(ix in observed)) {
+      drift.push(`  ${ix}: pinned but NOT observed (builder removed?)`);
+    }
+  }
+  if (drift.length > 0) {
+    assert.fail(
+      `BUILDER DRIFT detected for ${drift.length} ix(es):\n${drift.join('\n')}\n\n` +
+        `If intentional, regenerate the fixture with BUILDER_FINGERPRINT_CAPTURE=1.`,
+    );
+  }
 });

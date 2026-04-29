@@ -1,5 +1,17 @@
 # `@areal/bots-shared`
 
+## Layer 10 status
+
+- **State:** active. Consumed by all 6 bots (`merkle-publisher`,
+  `pool-rebalancer`, `revenue-crank`, `convert-and-fund-crank`,
+  `yield-claim-crank`, `nexus-manager`) via the workspace import
+  `@areal/bots-shared`.
+- **Carry-over:** shared module — pre-mainnet extraction targeted for
+  cross-bot/cross-script reuse. Today the package lives under
+  `bots/shared/` and is imported only by the bot fleet; the pre-mainnet
+  extraction widens that to the deploy-time scripts (`scripts/lib/*.ts`)
+  that currently re-implement subsets of the same primitives.
+
 Shared hardening primitives for the Areal Finance off-chain bot fleet.
 
 This package consolidates three production-readiness concerns that every

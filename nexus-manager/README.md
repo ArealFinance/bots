@@ -1,5 +1,12 @@
 # `nexus-manager`
 
+## Layer 10 status
+
+- **State:** active (live via `scripts/lib/start-bots.ts`).
+- **Single-instance lock:** `proper-lockfile` flock (R30).
+- **On-chain liveness probe:** verified via `LiquidityNexus` state account read — the bot's loaded keypair MUST match the on-chain `manager` field (kill-switch when zeroed); the orchestrator dwells past the heartbeat threshold and asserts the spawned PID is still alive before declaring Phase 8 complete.
+- **Heartbeat:** to dashboard System Overview (Layer 10 Substep 9).
+
 Manager-gated bot for the **LiquidityNexus** singleton on Areal Finance. Reads
 on-chain Nexus state, picks rebalance actions, and submits Manager-signed
 `nexus_swap` / `nexus_add_liquidity` / `nexus_remove_liquidity` transactions

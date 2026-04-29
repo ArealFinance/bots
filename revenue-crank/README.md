@@ -1,5 +1,12 @@
 # revenue-crank
 
+## Layer 10 status
+
+- **State:** active (live via `scripts/lib/start-bots.ts`).
+- **Single-instance lock:** `proper-lockfile` flock (R30).
+- **On-chain liveness probe:** verified via `RevenueAccount` state account read; the orchestrator dwells past the heartbeat threshold and asserts the spawned PID is still alive before declaring Phase 8 complete.
+- **Heartbeat:** to dashboard System Overview (Layer 10 Substep 9).
+
 Permissionless crank that triggers `OT::distribute_revenue` for each Ownership
 Token (OT) project once two on-chain conditions are met:
 

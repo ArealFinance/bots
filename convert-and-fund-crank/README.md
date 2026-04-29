@@ -1,5 +1,12 @@
 # convert-and-fund-crank
 
+## Layer 10 status
+
+- **State:** active (live via `scripts/lib/start-bots.ts`).
+- **Single-instance lock:** `proper-lockfile` flock (R30).
+- **On-chain liveness probe:** verified via `Accumulator` USDC ATA + `MerkleDistributor` state account reads; the orchestrator dwells past the heartbeat threshold and asserts the spawned PID is still alive before declaring Phase 8 complete.
+- **Heartbeat:** to dashboard System Overview (Layer 10 Substep 9).
+
 Permissionless crank that triggers `YD::convert_to_rwt` for each Ownership
 Token (OT) project once its Accumulator USDC ATA has more than
 `MIN_CONVERT_USDC` of USDC in it. The on-chain instruction:

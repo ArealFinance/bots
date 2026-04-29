@@ -1,5 +1,12 @@
 # yield-claim-crank
 
+## Layer 10 status
+
+- **State:** active (live via `scripts/lib/start-bots.ts`).
+- **Single-instance lock:** `proper-lockfile` flock (R30).
+- **On-chain liveness probe:** consumes the YD `MerkleDistributor.merkle_root` (offset 104) the publisher provably populated earlier in Phase 8; the orchestrator dwells past the heartbeat threshold and asserts the spawned PID is still alive before declaring Phase 8 complete.
+- **Heartbeat:** to dashboard System Overview (Layer 10 Substep 9).
+
 Permissionless crank that triggers the three Layer 8 claim flows after the
 Merkle Publisher releases a fresh root:
 
