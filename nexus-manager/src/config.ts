@@ -16,7 +16,7 @@ import type { RpcEndpoint } from '@areal/bots-shared';
 
 export { parseRpcEndpoints };
 
-const NetworkSchema = z.enum(['devnet', 'mainnet']);
+const NetworkSchema = z.enum(['localnet', 'devnet', 'mainnet']);
 const LogLevelSchema = z.enum(['debug', 'info', 'warn', 'error']);
 
 const EnvSchema = z.object({
