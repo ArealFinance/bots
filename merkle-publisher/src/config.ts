@@ -6,7 +6,7 @@ import { z } from 'zod';
  * Environment schema — fail-fast on startup if misconfigured.
  * Pubkey strings are validated lazily (parsed via new PublicKey).
  */
-const NetworkSchema = z.enum(['devnet', 'mainnet']);
+const NetworkSchema = z.enum(['localnet', 'devnet', 'mainnet']);
 const KmsProviderSchema = z.enum(['local', 'aws', 'gcp']);
 const LogLevelSchema = z.enum(['debug', 'info', 'warn', 'error']);
 
