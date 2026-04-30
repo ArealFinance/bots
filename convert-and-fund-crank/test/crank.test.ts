@@ -313,14 +313,20 @@ describe('ComputeBudget wrapping', () => {
 });
 
 describe('parsePoolSnapshot', () => {
-  it('parses reserves and fee_bps from a hand-rolled buffer', () => {
+  it('parses canonical PoolState (8 disc + 1 pool_type prefix, post-D28)', () => {
+    // Canonical layout (native-dex state.rs:39-65):
+    //   8 disc + 1 pool_type + 32 mint_a + 32 mint_b + 32 vault_a + 32 vault_b
+    //   + 8 reserve_a + 8 reserve_b + 16 total_lp_shares + 2 fee_bps + 1 is_active
+    // Absolute offsets: mint_a=9, mint_b=41, reserve_a=137, reserve_b=145,
+    //   fee_bps=169, is_active=171.
     const buf = Buffer.alloc(8 + 200);
-    USDC.toBuffer().copy(buf, 8 + 32);
-    RWT.toBuffer().copy(buf, 8 + 64);
-    buf.writeBigUInt64LE(123_456n, 8 + 160);
-    buf.writeBigUInt64LE(789_012n, 8 + 168);
-    buf.writeUInt16LE(25, 8 + 176);
-    buf.writeUInt8(1, 8 + 179);
+    buf.writeUInt8(1, 8);              // pool_type = Concentrated
+    USDC.toBuffer().copy(buf, 9);      // token_a_mint
+    RWT.toBuffer().copy(buf, 41);      // token_b_mint
+    buf.writeBigUInt64LE(123_456n, 137);
+    buf.writeBigUInt64LE(789_012n, 145);
+    buf.writeUInt16LE(25, 169);
+    buf.writeUInt8(1, 171);
 
     const pool = parsePoolSnapshot(POOL, buf);
     expect(pool).not.toBeNull();

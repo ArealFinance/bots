@@ -101,36 +101,41 @@ export async function fetchNav(conn: Connection, rwtVaultPda: PublicKey): Promis
 }
 
 /**
- * Parse a DEX classic `PoolState` and return the trading-relevant fields.
+ * Parse a DEX `PoolState` and return the trading-relevant fields.
  *
- * Classic pool layout (native-dex state.rs, 8 disc + body):
- *   pub authority:    [u8;32]   // 0..32
- *   pub token_a_mint: [u8;32]   // 32..64
- *   pub token_b_mint: [u8;32]   // 64..96
- *   pub vault_a:      [u8;32]   // 96..128
- *   pub vault_b:      [u8;32]   // 128..160
- *   pub reserve_a:    u64       // 160..168
- *   pub reserve_b:    u64       // 168..176
- *   pub fee_bps:      u16       // 176..178
- *   pub pool_type:    u8        // 178
- *   pub is_active:    bool      // 179
- *   ... (concentrated-pool fields follow)
+ * Canonical PoolState layout (native-dex state.rs:39-65, post-D28).
+ * 8 disc + body. Body offsets — added to 8 for absolute offsets in `data`:
+ *   pool_type:    u8        // body 0   → abs 8
+ *   token_a_mint: [u8;32]   // body 1   → abs 9
+ *   token_b_mint: [u8;32]   // body 33  → abs 41
+ *   vault_a:      [u8;32]   // body 65  → abs 73
+ *   vault_b:      [u8;32]   // body 97  → abs 105
+ *   reserve_a:    u64       // body 129 → abs 137
+ *   reserve_b:    u64       // body 137 → abs 145
+ *   total_lp_shares: u128   // body 145 → abs 153
+ *   fee_bps:      u16       // body 161 → abs 169
+ *   is_active:    bool      // body 163 → abs 171
+ *   ...
  *
- * Match the on-chain pool layout used in `convert_to_rwt`. The byte offsets
- * here mirror the comments in `architecture §8.2`. For Concentrated pools
- * the `reserve_*` / `fee_bps` fields share the same offsets — we only read
- * the classic-shared prefix, so concentrated pools are fine too.
+ * Mirrors offsets pinned in scripts/lib/bootstrap-init.ts (RESERVE_A_OFFSET
+ * = 137) and bots/.e2e/layer-10-scenario-{4,5}.test.ts. PRIOR LAYOUT here
+ * was stale (assumed 32B `authority` prefix, no `pool_type` byte) — that
+ * caused convert_to_rwt skip with "pool does not contain USDC mint" because
+ * the wrong bytes were being matched against cfg.usdcMint.
  */
 const POOL_OFFSET = {
-  TOKEN_A_MINT: 8 + 32,
-  TOKEN_B_MINT: 8 + 64,
-  RESERVE_A: 8 + 160,
-  RESERVE_B: 8 + 168,
-  FEE_BPS: 8 + 176,
-  IS_ACTIVE: 8 + 179,
+  POOL_TYPE: 8,
+  TOKEN_A_MINT: 8 + 1,
+  TOKEN_B_MINT: 8 + 1 + 32,
+  VAULT_A: 8 + 1 + 64,
+  VAULT_B: 8 + 1 + 96,
+  RESERVE_A: 8 + 1 + 128,
+  RESERVE_B: 8 + 1 + 136,
+  FEE_BPS: 8 + 1 + 160,
+  IS_ACTIVE: 8 + 1 + 162,
 } as const;
 
-const POOL_MIN_LEN = 8 + 180;
+const POOL_MIN_LEN = 8 + 1 + 163;
 
 export function parsePoolSnapshot(address: PublicKey, data: Buffer): PoolSnapshot | null {
   if (data.length < POOL_MIN_LEN) return null;
@@ -294,10 +299,10 @@ export function resolveUsdcSide(
 
 /**
  * Extract pool vaults A/B from PoolState data. Mirrors the offsets used by
- * `parsePoolSnapshot` so the two readers stay in lockstep.
+ * `parsePoolSnapshot` (canonical PoolState — 8 disc + 1 pool_type prefix).
  */
-export const POOL_VAULT_A_OFFSET = 8 + 96;
-export const POOL_VAULT_B_OFFSET = 8 + 128;
+export const POOL_VAULT_A_OFFSET = 8 + 1 + 64;  // 73
+export const POOL_VAULT_B_OFFSET = 8 + 1 + 96;  // 105
 
 export interface PoolAccountList {
   vaultA: PublicKey;

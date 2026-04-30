@@ -143,10 +143,12 @@ describe('fetchDexArealFeeDestination', () => {
 });
 
 describe('fetchPoolAccountList', () => {
-  it('reads vaultA at body offset 96 and vaultB at body offset 128', async () => {
+  it('reads vaultA at body offset 65 and vaultB at body offset 97 (post-D28 — 1B pool_type prefix)', async () => {
+    // Canonical PoolState layout: 8 disc + 1 pool_type + 32 mint_a + 32 mint_b
+    // + 32 vault_a + 32 vault_b + ... → vault_a at body offset 65, vault_b at 97.
     const body = Buffer.alloc(180);
-    PUB(0xa1).toBuffer().copy(body, 96);
-    PUB(0xb2).toBuffer().copy(body, 128);
+    PUB(0xa1).toBuffer().copy(body, 65);
+    PUB(0xb2).toBuffer().copy(body, 97);
     const data = Buffer.concat([ZERO_DISC, body]);
     const out = await fetchPoolAccountList(mockConn(data), PUB(1));
     expect(out!.vaultA.equals(PUB(0xa1))).toBe(true);
