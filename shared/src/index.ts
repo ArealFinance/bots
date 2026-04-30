@@ -46,3 +46,20 @@ export {
   MIN_LAMPORTS_DEFAULT,
 } from './preflight.js';
 export type { AssertCrankBalanceResult } from './preflight.js';
+
+// SD-31 (Layer 10 closure): zero-authority-audit shared helper. Single
+// source of truth for the post-Phase-7 cross-contract assertion + the
+// dual deployer-zero-authority precheck. Replaces the earlier .cts
+// workaround driver in verify-deployment.sh; all consumers import here.
+export {
+  assertAuthorityChainComplete,
+  assertDeployerHasNoAuthority,
+  assertDeployerZeroAuthority,
+} from './zero-authority-audit.js';
+export type {
+  ZeroAuthorityArtifact,
+  AuthorityContract,
+  ContractAuthorityCheck,
+  ZeroAuthorityResult,
+  AuthorityChainTargets,
+} from './zero-authority-audit.js';

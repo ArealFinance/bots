@@ -31,6 +31,10 @@
     "./logger": {
       "import": "./dist/logger.js",
       "types": "./dist/logger.d.ts"
+    },
+    "./zero-authority-audit": {
+      "import": "./dist/zero-authority-audit.js",
+      "types": "./dist/zero-authority-audit.d.ts"
     }
   },
   "scripts": {
