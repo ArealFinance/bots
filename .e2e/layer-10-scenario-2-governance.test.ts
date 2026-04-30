@@ -759,6 +759,13 @@ if (!PREFLIGHT.ready) {
     // Uses FUTARCHY_CFG_AUTHORITY_OFFSET = 40 (verified against
     // contracts/futarchy/src/state.rs:16-25). Skipped cleanly when
     // futarchy_config_pda or deployer_pubkey is unset.
+    //
+    // D32 pseudo-multisig caveat (mirrors S6.10): on devnet/localhost the
+    // multisig == deployer, so the post-Phase-7 FutarchyConfig.authority
+    // legitimately equals deployer. Detect via art.authority_chain.multisig_pubkey
+    // and surface as a structured note (mainnet rehearsal closes the
+    // negative-check; on devnet, Phase 7's positive `assertAuthorityChainComplete`
+    // is the live R-G mitigation).
     if (art.deployer_pubkey && arlOtRec.futarchy_config_pda) {
       const futCfgPda = new PublicKey(arlOtRec.futarchy_config_pda);
       const futInfo = await conn.getAccountInfo(futCfgPda, 'confirmed');
@@ -769,10 +776,23 @@ if (!PREFLIGHT.ready) {
         );
         const futAuthPubkey = new PublicKey(futAuthBytes);
         const deployerPubkey = new PublicKey(art.deployer_pubkey);
-        assert.ok(
-          !futAuthPubkey.equals(deployerPubkey),
-          `FutarchyConfig authority ${futAuthPubkey.toBase58()} == deployer — Phase 7 Futarchy handoff incomplete`,
-        );
+        const multisigB58 = art.authority_chain?.multisig_pubkey;
+        const devnetSurrogate =
+          !!multisigB58 && new PublicKey(multisigB58).equals(deployerPubkey);
+        if (devnetSurrogate && futAuthPubkey.equals(deployerPubkey)) {
+          // eslint-disable-next-line no-console
+          console.warn(
+            '[layer-10-scenario-2] S2.5: devnet pseudo-multisig surrogate ' +
+              '(multisig == deployer) — FutarchyConfig.authority legitimately ' +
+              'equals deployer; R-G closure deferred to mainnet rehearsal where ' +
+              'multisig != deployer.',
+          );
+        } else {
+          assert.ok(
+            !futAuthPubkey.equals(deployerPubkey),
+            `FutarchyConfig authority ${futAuthPubkey.toBase58()} == deployer — Phase 7 Futarchy handoff incomplete`,
+          );
+        }
       }
     }
   });
