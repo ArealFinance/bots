@@ -246,6 +246,28 @@ async function main(): Promise<void> {
 
   eventWatcher.start();
 
+  // Periodic reconcile poll — Solana test-validator does not always fire
+  // `onLogs` for program logs reliably (known runtime quirk). Polling-based
+  // reconcile catches events the WebSocket subscription misses. Frequency
+  // matches the publish interval so we close the gap within one loop tick.
+  // Idempotent — `processed` set + UNIQUE(tx_signature) dedupe across paths.
+  const reconcileTimer = setInterval(() => {
+    void (async () => {
+      try {
+        const lastSlot = snapshotStore.getMaxSlot();
+        const sinceSlot = lastSlot != null ? Number(lastSlot) : null;
+        const missed = await eventWatcher.reconcile(sinceSlot);
+        if (missed.length > 0) {
+          logger.info('periodic reconcile picked up missed events', { count: missed.length });
+        }
+      } catch (err) {
+        logger.error('periodic reconcile failed (continuing)', err);
+      }
+    })();
+  }, cfg.publishIntervalMs);
+  // Tied to shutdown via the heartbeat-cleanup flow; stopController covers it.
+  stopController.signal.addEventListener('abort', () => clearInterval(reconcileTimer), { once: true });
+
   // Fire-and-forget the publisher loop. It exits when the abort signal fires.
   // LOW-R2-1: on crash, go through the shared shutdown path so the leader
   // lock is released (otherwise a successor waits the full 60s stale TTL).

@@ -101,11 +101,11 @@ describe('fetchRwtVaultAccounts (capital + areal-fee offsets)', () => {
 });
 
 describe('fetchDistributorRewardVault', () => {
-  it('reward_vault offset from body is 64', () => {
-    expect(DISTRIBUTOR_REWARD_VAULT_OFFSET_FROM_BODY).toBe(64);
+  it('reward_vault offset from body is 32 (canonical MerkleDistributor: ot_mint=0..32, reward_vault=32..64)', () => {
+    expect(DISTRIBUTOR_REWARD_VAULT_OFFSET_FROM_BODY).toBe(32);
   });
 
-  it('reads pubkey at body offset 64', async () => {
+  it('reads pubkey at body offset 32', async () => {
     const body = Buffer.alloc(160);
     PUB(0xab).toBuffer().copy(body, DISTRIBUTOR_REWARD_VAULT_OFFSET_FROM_BODY);
     const data = Buffer.concat([ZERO_DISC, body]);
@@ -115,12 +115,12 @@ describe('fetchDistributorRewardVault', () => {
 });
 
 describe('fetchYdArealFeeDestination', () => {
-  it('YD config fee_dest offset from body is 32', () => {
-    expect(YD_CONFIG_FEE_DEST_OFFSET_FROM_BODY).toBe(32);
+  it('YD config fee_dest offset from body is 107 (canonical: authority+pending+has_pending+publish_authority+protocol_fee_bps+min_distribution_amount = 32+32+1+32+2+8)', () => {
+    expect(YD_CONFIG_FEE_DEST_OFFSET_FROM_BODY).toBe(107);
   });
 
-  it('reads pubkey at body offset 32', async () => {
-    const body = Buffer.alloc(96);
+  it('reads pubkey at body offset 107', async () => {
+    const body = Buffer.alloc(160);
     PUB(0x77).toBuffer().copy(body, YD_CONFIG_FEE_DEST_OFFSET_FROM_BODY);
     const data = Buffer.concat([ZERO_DISC, body]);
     const out = await fetchYdArealFeeDestination(mockConn(data), PUB(1));
@@ -129,12 +129,12 @@ describe('fetchYdArealFeeDestination', () => {
 });
 
 describe('fetchDexArealFeeDestination', () => {
-  it('DEX config fee_dest offset from body is 32', () => {
-    expect(DEX_CONFIG_FEE_DEST_OFFSET_FROM_BODY).toBe(32);
+  it('DEX config fee_dest offset from body is 101 (canonical: authority+pending+has_pending+pause_authority+base_fee_bps+lp_fee_share_bps = 32+32+1+32+2+2)', () => {
+    expect(DEX_CONFIG_FEE_DEST_OFFSET_FROM_BODY).toBe(101);
   });
 
-  it('reads pubkey at body offset 32', async () => {
-    const body = Buffer.alloc(96);
+  it('reads pubkey at body offset 101', async () => {
+    const body = Buffer.alloc(160);
     PUB(0x33).toBuffer().copy(body, DEX_CONFIG_FEE_DEST_OFFSET_FROM_BODY);
     const data = Buffer.concat([ZERO_DISC, body]);
     const out = await fetchDexArealFeeDestination(mockConn(data), PUB(1));

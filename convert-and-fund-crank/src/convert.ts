@@ -121,7 +121,10 @@ export function buildConvertToRwtIx(args: BuildConvertArgs): BuiltConvertIx {
     { pubkey: args.accumulatorRwtAta, isSigner: false, isWritable: true },
     { pubkey: args.feeAccount, isSigner: false, isWritable: true },
     { pubkey: args.rewardVault, isSigner: false, isWritable: true },
-    { pubkey: args.rwtMint, isSigner: false, isWritable: false },
+    // rwt_mint MUST be writable: the inner cpi_rwt_mint CPI invokes
+    // RWT::mint_rwt which mutates the mint's supply field. Outer ix must
+    // pre-flag mut for the CPI's writable privilege not to "escalate".
+    { pubkey: args.rwtMint, isSigner: false, isWritable: true },
     { pubkey: args.dexConfig, isSigner: false, isWritable: false },
     { pubkey: args.poolState, isSigner: false, isWritable: true },
     { pubkey: args.dexPoolVaultIn, isSigner: false, isWritable: true },

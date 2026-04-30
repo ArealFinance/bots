@@ -160,20 +160,22 @@ export async function fetchPoolSnapshot(
 /**
  * Parse a YD `MerkleDistributor` and extract `reward_vault` (32 bytes).
  *
- * MerkleDistributor body layout (contracts/yield-distribution/src/state.rs,
- * after 8-byte discriminator):
- *   pub authority:        [u8;32]    // 0..32
- *   pub ot_mint:          [u8;32]    // 32..64
- *   pub reward_vault:     [u8;32]    // 64..96
+ * Canonical MerkleDistributor body layout (contracts/yield-distribution/src/state.rs):
+ *   pub ot_mint:          [u8;32]    // 0..32
+ *   pub reward_vault:     [u8;32]    // 32..64
+ *   pub accumulator:      [u8;32]    // 64..96
  *   pub merkle_root:      [u8;32]    // 96..128
- *   pub epoch:            u64        // 128..136
- *   pub vesting_period:   i64        // 136..144
- *   pub bump:             u8         // 144..145
+ *   pub max_total_claim:  u64        // 128..136
+ *   pub total_claimed:    u64        // 136..144
+ *   pub total_funded:     u64        // 144..152
+ *   ...
  *
- * We only need `reward_vault`; pinned via on-chain fixture in the parity
- * test (R26) so any layout drift is caught at CI time.
+ * Pinned via on-chain fixture in the parity test (R26). Prior reader had
+ * stale offsets (assumed leading authority field) — returned `accumulator`
+ * instead of `reward_vault`, which then mismatched the contract's
+ * `distributor.reward_vault` constraint inside convert_to_rwt.
  */
-export const DISTRIBUTOR_REWARD_VAULT_OFFSET_FROM_BODY = 64;
+export const DISTRIBUTOR_REWARD_VAULT_OFFSET_FROM_BODY = 32;
 
 export async function fetchDistributorRewardVault(
   conn: Connection,
@@ -188,18 +190,27 @@ export async function fetchDistributorRewardVault(
 
 /**
  * Parse a YD singleton `DistributionConfig` and extract
- * `areal_fee_destination_account` (32 bytes).
+ * `areal_fee_destination` (32 bytes).
  *
- * DistributionConfig body layout (yield-distribution state.rs):
- *   pub publish_authority:                [u8;32]    // 0..32
- *   pub areal_fee_destination_account:    [u8;32]    // 32..64
- *   pub protocol_fee_bps:                 u16        // 64..66
- *   pub min_distribution_amount:          u64        // 66..74
- *   pub bump:                             u8         // 74..75
+ * Canonical DistributionConfig body layout (yield-distribution state.rs):
+ *   pub authority:                  [u8;32]    // 0..32
+ *   pub pending_authority:          [u8;32]    // 32..64
+ *   pub has_pending:                bool       // 64..65
+ *   pub publish_authority:          [u8;32]    // 65..97
+ *   pub protocol_fee_bps:           u16        // 97..99
+ *   pub min_distribution_amount:    u64        // 99..107
+ *   pub areal_fee_destination:      [u8;32]    // 107..139
+ *   pub is_active:                  bool       // 139..140
+ *   pub bump:                       u8         // 140..141
  *
  * The ATA returned here is RWT-denominated and owned by the protocol.
+ * Prior reader had stale offsets (assumed `publish_authority` first, no
+ * `authority` / `pending_authority` / `has_pending` prefix) and returned
+ * `pending_authority` bytes (zeroed = SystemProgram pubkey) instead of the
+ * fee destination — convert_to_rwt then reverted with "fee_account must
+ * be writable" because the SystemProgram account isn't writable.
  */
-export const YD_CONFIG_FEE_DEST_OFFSET_FROM_BODY = 32;
+export const YD_CONFIG_FEE_DEST_OFFSET_FROM_BODY = 107;
 
 export async function fetchYdArealFeeDestination(
   conn: Connection,
@@ -216,12 +227,22 @@ export async function fetchYdArealFeeDestination(
  * Parse a DEX singleton `DexConfig` and extract `areal_fee_destination`
  * (32 bytes — USDC-denominated; receives the DEX swap fee).
  *
- * DexConfig body layout (native-dex state.rs):
+ * Canonical DexConfig body layout (native-dex state.rs):
  *   pub authority:                  [u8;32]   // 0..32
- *   pub areal_fee_destination:      [u8;32]   // 32..64
- *   ...
+ *   pub pending_authority:          [u8;32]   // 32..64
+ *   pub has_pending:                bool      // 64..65
+ *   pub pause_authority:            [u8;32]   // 65..97
+ *   pub base_fee_bps:               u16       // 97..99
+ *   pub lp_fee_share_bps:           u16       // 99..101
+ *   pub areal_fee_destination:      [u8;32]   // 101..133
+ *   pub rebalancer:                 [u8;32]   // 133..165
+ *   pub is_active:                  bool      // 165..166
+ *   pub bump:                       u8        // 166..167
+ *
+ * Prior reader had stale offset (32, assumed authority directly followed by
+ * fee dest) — returned `pending_authority` bytes (zeroed = SystemProgram).
  */
-export const DEX_CONFIG_FEE_DEST_OFFSET_FROM_BODY = 32;
+export const DEX_CONFIG_FEE_DEST_OFFSET_FROM_BODY = 101;
 
 export async function fetchDexArealFeeDestination(
   conn: Connection,
