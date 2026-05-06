@@ -8,9 +8,13 @@
 global:
   scrape_interval: ${PROM_SCRAPE_INTERVAL}
   scrape_timeout: 10s
+  # Multi-env labels propagate to every series scraped by this Prometheus.
+  # When this stack runs alongside another env's stack (Federation / second
+  # Grafana datasource), the labels disambiguate metric origin.
   external_labels:
-    env: "${AREAL_ENV}"
-    cluster: "${AREAL_CLUSTER}"
+    env: "${AREAL_ENV}"            # business-plane: testnet | devnet | mainnet
+    cluster: "${AREAL_CLUSTER}"     # physical cluster: fornex | prod-hetzner | ...
+    network: "${SOLANA_NETWORK}"    # data-plane: solana-test-validator | devnet | mainnet
 
 rule_files:
   - 'rules/*.yml'
@@ -57,7 +61,12 @@ scrape_configs:
   # Phase 21 — uncomment when bot instrumentation lands.
   # Each crank binds 127.0.0.1:910X on the host; prometheus shares host
   # network namespace, so localhost:910X works directly.
-  # - job_name: bots
+  #
+  # Job name is suffixed with the env (`bots-${AREAL_ENV}`) so that when a
+  # second cluster's bots are added later (e.g. another scrape_config block
+  # for `bots-mainnet` reaching across a WireGuard mesh), they do not
+  # collide on `job` label and stay distinguishable in Grafana.
+  # - job_name: bots-${AREAL_ENV}
   #   static_configs:
   #     - targets:
   #         - 'localhost:9101'   # merkle-publisher
@@ -68,7 +77,7 @@ scrape_configs:
   #         - 'localhost:9106'   # nexus-manager
 
   # Phase 22 — uncomment when chain-invariants exporter lands.
-  # - job_name: chain-invariants
+  # - job_name: chain-invariants-${AREAL_ENV}
   #   static_configs:
   #     - targets:
   #         - 'localhost:9201'

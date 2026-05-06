@@ -176,6 +176,35 @@ All `.template.*` files are rendered by the bootstrap script via `envsubst`. Onl
 
 All ports bind `127.0.0.1` exclusively. The bootstrap script audits this with `ss -tlnp`.
 
+## Multi-Environment Awareness
+
+The stack is **multi-env-aware from Phase 20**, even though only one environment is deployed at a time.
+
+Three identity labels propagate via Prometheus `external_labels` to every series scraped:
+
+| Label | Plane | Values |
+|---|---|---|
+| `env` | business | `testnet` \| `devnet` \| `mainnet` |
+| `cluster` | physical | `fornex` \| `prod-hetzner` \| ... |
+| `network` | data | `solana-test-validator` \| `devnet` \| `mainnet` |
+
+`env` and `network` are decoupled deliberately: a `testnet` deployment may point at `solana-test-validator` (local) or `devnet` (Solana devnet); a `mainnet-staging` could point at `mainnet` while still being routed as a non-urgent alert tier.
+
+**Per-cluster deployment matrix:**
+
+| Cluster | `AREAL_ENV` | `AREAL_CLUSTER` | `SOLANA_NETWORK` | When |
+|---|---|---|---|---|
+| Fornex VPS (current) | `testnet` | `fornex` | `solana-test-validator` | Phase 20+ |
+| Future devnet stage | `devnet` | _your-name_ | `devnet` | When devnet bots ship |
+| Future production | `mainnet` | _your-name_ | `mainnet` | When mainnet bots ship |
+
+Each cluster runs its OWN observability stack (own Prometheus, own Alertmanager, own Grafana) with `external_labels` set accordingly. To compare envs in one Grafana, configure multiple Prometheus datasources (one per cluster) — no federation needed at small scale.
+
+Alertmanager routing can use the `env` label to differentiate severity tiers:
+- `severity=critical AND env=mainnet` → urgent channel + page
+- `severity=critical AND env=testnet` → quiet dev channel
+- (Routing tree expanded in Phase 24.)
+
 ## Phase Roadmap
 
 - **Phase 20** (just landed): Foundation stack — templates, base alerts (disk/memory/TLS/blackbox), Infra dashboard.

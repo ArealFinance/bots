@@ -27,13 +27,42 @@
       "id": 1,
       "type": "text",
       "title": "",
-      "gridPos": { "h": 3, "w": 24, "x": 0, "y": 0 },
+      "gridPos": { "h": 3, "w": 18, "x": 0, "y": 0 },
       "options": {
         "mode": "markdown",
         "content": "## Areal Finance — Infrastructure\n\nPublic read-only view. Source: github.com/ArealFinance/bots tree at bots/observability/."
       },
       "transparent": false,
       "datasource": null
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Environment",
+      "gridPos": { "h": 3, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (env, network, cluster) (up{job=\"prometheus\"})",
+          "instant": true,
+          "legendFormat": "{{env}} / {{network}} / {{cluster}}"
+        }
+      ],
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "/.*/" },
+        "textMode": "name",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "purple" },
+          "mappings": []
+        },
+        "overrides": []
+      }
     },
     {
       "id": 2,
