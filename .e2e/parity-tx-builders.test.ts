@@ -50,10 +50,10 @@ import {
   buildRwtClaimYieldIx,
   buildDexCompoundIx,
   buildOtTreasuryClaimIx,
-  type BuildRwtClaimArgs,
+  type BuildRwtClaimYieldArgs as BuildRwtClaimArgs,
   type BuildDexCompoundArgs,
   type BuildOtTreasuryClaimArgs,
-} from '../yield-claim-crank/src/claim-builders.js';
+} from '@areal/sdk/tx';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);

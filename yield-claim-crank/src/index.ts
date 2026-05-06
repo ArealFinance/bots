@@ -37,9 +37,9 @@ import {
  *
  * For Layer 8, dynamic-account assembly (rwt_claim_ata, liquidity_dest, etc.)
  * is intentionally deferred — the bot runs decisions, logs them, and updates
- * checkpoints. The claim builders in `src/claim-builders.ts` are exported so
- * dashboards / Step 10 E2E can compose the actual TX. See README "Wiring
- * dynamic accounts" for details.
+ * checkpoints. The claim ix builders now live in `@areal/sdk/tx`; only the
+ * thin bot-local helpers (`proofFileToArgs`, `wrapClaimTx`) remain in
+ * `src/claim-builders.ts`. See README "Wiring dynamic accounts" for details.
  */
 async function main(): Promise<void> {
   const cfg = loadConfig();

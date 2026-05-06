@@ -5,17 +5,15 @@ import * as path from 'node:path';
 import { Keypair, PublicKey } from '@solana/web3.js';
 
 import { CheckpointStore } from '../src/checkpoint.js';
+import { proofFileToArgs, wrapClaimTx } from '../src/claim-builders.js';
 import {
   buildDexCompoundIx,
   buildOtTreasuryClaimIx,
   buildRwtClaimYieldIx,
-  discDexCompoundYield,
-  discOtClaimYdForTreasury,
-  discRwtClaimYield,
-  encodeClaimArgsBody,
-  proofFileToArgs,
-  wrapClaimTx,
-} from '../src/claim-builders.js';
+  DEX_COMPOUND_YIELD_DISCRIMINATOR,
+  OT_CLAIM_YD_FOR_TREASURY_DISCRIMINATOR,
+  RWT_CLAIM_YIELD_DISCRIMINATOR,
+} from '@areal/sdk/tx';
 import { parseRpcEndpoints } from '../src/config.js';
 import { decideClaim, SingleFlightLock } from '../src/crank.js';
 import {
@@ -48,30 +46,14 @@ const OT_PROGRAM = new PublicKey('oWnqbNwmEdjNS5KVbxz8xeuGNjKMd1aiNF89d7qdARL');
 const OT_MINT = new PublicKey('11111111111111111111111111111112');
 const POOL = new PublicKey('11111111111111111111111111111113');
 
-describe('encodeClaimArgsBody', () => {
-  it('serializes (amount, proofLen, proofNodes) at known offsets', () => {
-    const nodes = [Buffer.alloc(32, 0xaa), Buffer.alloc(32, 0xbb)];
-    const buf = encodeClaimArgsBody(123_456_789n, nodes);
-    expect(buf.length).toBe(8 + 4 + 64);
-    expect(buf.readBigUInt64LE(0)).toBe(123_456_789n);
-    expect(buf.readUInt32LE(8)).toBe(2);
-    expect(buf.subarray(12, 44).every(b => b === 0xaa)).toBe(true);
-    expect(buf.subarray(44, 76).every(b => b === 0xbb)).toBe(true);
-  });
-
-  it('rejects nodes that are not 32 bytes', () => {
-    expect(() => encodeClaimArgsBody(0n, [Buffer.alloc(31, 0)])).toThrow();
-  });
-});
-
-describe('claim discriminators', () => {
+describe('claim discriminators (SDK)', () => {
   it('rwt::claim_yield matches sha256("global:claim_yield")[..8]', () => {
     const expected = require('node:crypto')
       .createHash('sha256')
       .update('global:claim_yield')
       .digest()
       .subarray(0, 8) as Buffer;
-    expect(discRwtClaimYield().equals(expected)).toBe(true);
+    expect(RWT_CLAIM_YIELD_DISCRIMINATOR().equals(expected)).toBe(true);
   });
 
   it('dex::compound_yield matches sha256("global:compound_yield")[..8]', () => {
@@ -80,7 +62,7 @@ describe('claim discriminators', () => {
       .update('global:compound_yield')
       .digest()
       .subarray(0, 8) as Buffer;
-    expect(discDexCompoundYield().equals(expected)).toBe(true);
+    expect(DEX_COMPOUND_YIELD_DISCRIMINATOR().equals(expected)).toBe(true);
   });
 
   it('ot::claim_yd_for_treasury matches sha256("global:claim_yd_for_treasury")[..8]', () => {
@@ -89,7 +71,7 @@ describe('claim discriminators', () => {
       .update('global:claim_yd_for_treasury')
       .digest()
       .subarray(0, 8) as Buffer;
-    expect(discOtClaimYdForTreasury().equals(expected)).toBe(true);
+    expect(OT_CLAIM_YD_FOR_TREASURY_DISCRIMINATOR().equals(expected)).toBe(true);
   });
 });
 
@@ -124,7 +106,7 @@ describe('claim ix builders', () => {
     expect(ix.keys[0]!.pubkey.equals(crank)).toBe(true);
     expect(ix.keys[1]!.pubkey.equals(rwtVault)).toBe(true);
     expect(ix.keys[7]!.pubkey.equals(OT_MINT)).toBe(true);
-    expect(ix.data.subarray(0, 8).equals(discRwtClaimYield())).toBe(true);
+    expect(ix.data.subarray(0, 8).equals(RWT_CLAIM_YIELD_DISCRIMINATOR())).toBe(true);
     expect(ix.data.readBigUInt64LE(8)).toBe(1_000_000_000n);
     expect(ix.data.readUInt32LE(16)).toBe(1);
   });
@@ -148,7 +130,7 @@ describe('claim ix builders', () => {
     expect(ix.keys).toHaveLength(11);
     expect(ix.keys[1]!.pubkey.equals(POOL)).toBe(true);
     expect(ix.keys[1]!.isWritable).toBe(true);
-    expect(ix.data.subarray(0, 8).equals(discDexCompoundYield())).toBe(true);
+    expect(ix.data.subarray(0, 8).equals(DEX_COMPOUND_YIELD_DISCRIMINATOR())).toBe(true);
     expect(ix.data.readUInt32LE(16)).toBe(0);
   });
 
@@ -175,7 +157,7 @@ describe('claim ix builders', () => {
     expect(ix.keys).toHaveLength(12);
     expect(ix.keys[1]!.pubkey.equals(otMint)).toBe(true);
     expect(ix.keys[5]!.pubkey.equals(ydOtMint)).toBe(true);
-    expect(ix.data.subarray(0, 8).equals(discOtClaimYdForTreasury())).toBe(true);
+    expect(ix.data.subarray(0, 8).equals(OT_CLAIM_YD_FOR_TREASURY_DISCRIMINATOR())).toBe(true);
   });
 });
 

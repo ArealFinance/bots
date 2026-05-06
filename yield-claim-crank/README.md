@@ -127,8 +127,9 @@ Each of the three claim builders accepts the dynamic accounts as inputs:
 
 For Layer 8 the bot logs SEND decisions and updates the checkpoint, while
 leaving the live TX submission to a Step 10 E2E driver that knows how to
-read each program's state. Operators can use the exported builders
+read each program's state. The ix builders
 (`buildRwtClaimYieldIx`, `buildDexCompoundIx`, `buildOtTreasuryClaimIx`)
+are exported from `@areal/sdk/tx` — operators can import them there
 directly to compose TXs by hand from the dashboard.
 
 ## Setup
@@ -180,10 +181,11 @@ npm -w yield-claim-crank run build
 
 ## Tests
 
-- `encodeClaimArgsBody` — byte-layout fixture for the YD::claim instruction
-  data shared across all 3 wrappers.
-- Discriminators — sha256 parity for all three `global:<ix>` names.
-- Each builder — account count, programId pinning, args encoding.
+- Discriminators — sha256 parity for all three `global:<ix>` names
+  (verifies the SDK constants `RWT_CLAIM_YIELD_DISCRIMINATOR`,
+  `DEX_COMPOUND_YIELD_DISCRIMINATOR`,
+  `OT_CLAIM_YD_FOR_TREASURY_DISCRIMINATOR`).
+- Each SDK builder — account count, programId pinning, args byte layout.
 - `wrapClaimTx` — CU-budget prefix.
 - `decideClaim` — D9 epoch gating across `no_proof` / `epoch_stale` / `send`.
 - `SingleFlightLock` — D10 dedup invariants.
