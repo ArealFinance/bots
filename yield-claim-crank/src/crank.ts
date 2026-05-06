@@ -25,13 +25,13 @@ import {
   wrapClaimTx,
 } from './claim-builders.js';
 import {
-  deriveClaimStatusPda,
-  deriveDistConfigPda,
-  deriveDistributorPda,
-  deriveOtTreasuryPda,
-  deriveRwtDistConfigPda,
-  deriveRwtVaultPda,
-} from './pdas.js';
+  findClaimStatusPda,
+  findMerkleDistributorPda,
+  findOtTreasuryPda,
+  findRwtDistConfigPda,
+  findRwtVaultPda,
+  findYdConfigPda,
+} from '@areal/sdk/pda';
 
 /**
  * yield-claim-crank main loop.
@@ -112,8 +112,8 @@ export async function processVaultClaim(args: {
 }): Promise<ClaimDecision> {
   const { conn, cfg, checkpoint, fetcher, otMint, inputs, client } = args;
 
-  const distributor = deriveDistributorPda(otMint, cfg.ydProgramId);
-  const rwtVault = deriveRwtVaultPda(cfg.rwtEngineProgramId);
+  const [distributor] = findMerkleDistributorPda(otMint, cfg.ydProgramId);
+  const [rwtVault] = findRwtVaultPda(cfg.rwtEngineProgramId);
 
   let proof: ProofFile | null = null;
   try {
@@ -146,13 +146,9 @@ export async function processVaultClaim(args: {
     return decision;
   }
 
-  const distConfig = deriveDistConfigPda(cfg.ydProgramId);
-  const rwtDistConfig = deriveRwtDistConfigPda(cfg.rwtEngineProgramId);
-  const ydClaimStatus = deriveClaimStatusPda({
-    distributor,
-    claimant: rwtVault,
-    ydProgramId: cfg.ydProgramId,
-  });
+  const [distConfig] = findYdConfigPda(cfg.ydProgramId);
+  const [rwtDistConfig] = findRwtDistConfigPda(cfg.rwtEngineProgramId);
+  const [ydClaimStatus] = findClaimStatusPda(distributor, rwtVault, cfg.ydProgramId);
 
   const { proof: proofNodes } = proofFileToArgs(proof!);
   const ix = buildRwtClaimYieldIx({
@@ -217,7 +213,7 @@ export async function processPoolCompound(args: {
     });
     return { kind: 'skip', reason: 'no_proof' };
   }
-  const distributor = deriveDistributorPda(inputs.otMint, cfg.ydProgramId);
+  const [distributor] = findMerkleDistributorPda(inputs.otMint, cfg.ydProgramId);
 
   let proof: ProofFile | null = null;
   try {
@@ -234,12 +230,8 @@ export async function processPoolCompound(args: {
   });
   if (decision.kind === 'skip') return decision;
 
-  const ydConfig = deriveDistConfigPda(cfg.ydProgramId);
-  const ydClaimStatus = deriveClaimStatusPda({
-    distributor,
-    claimant: pool,
-    ydProgramId: cfg.ydProgramId,
-  });
+  const [ydConfig] = findYdConfigPda(cfg.ydProgramId);
+  const [ydClaimStatus] = findClaimStatusPda(distributor, pool, cfg.ydProgramId);
 
   const { proof: proofNodes } = proofFileToArgs(proof!);
   const ix = buildDexCompoundIx({
@@ -293,8 +285,8 @@ export async function processTreasuryClaim(args: {
   client?: MultiRpcClient;
 }): Promise<ClaimDecision> {
   const { conn, cfg, checkpoint, fetcher, otMint, ydOtMint, inputs, client } = args;
-  const otTreasury = deriveOtTreasuryPda(otMint, cfg.otProgramId);
-  const distributor = deriveDistributorPda(ydOtMint, cfg.ydProgramId);
+  const [otTreasury] = findOtTreasuryPda(otMint, cfg.otProgramId);
+  const [distributor] = findMerkleDistributorPda(ydOtMint, cfg.ydProgramId);
 
   let proof: ProofFile | null = null;
   try {
@@ -326,12 +318,8 @@ export async function processTreasuryClaim(args: {
     return decision;
   }
 
-  const ydConfig = deriveDistConfigPda(cfg.ydProgramId);
-  const ydClaimStatus = deriveClaimStatusPda({
-    distributor,
-    claimant: otTreasury,
-    ydProgramId: cfg.ydProgramId,
-  });
+  const [ydConfig] = findYdConfigPda(cfg.ydProgramId);
+  const [ydClaimStatus] = findClaimStatusPda(distributor, otTreasury, cfg.ydProgramId);
 
   const { proof: proofNodes } = proofFileToArgs(proof!);
   const ix = buildOtTreasuryClaimIx({
