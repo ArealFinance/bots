@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import { PublicKey } from '@solana/web3.js';
 
 import {
@@ -11,23 +12,28 @@ import {
 } from '../src/nexus-state-reader.js';
 import {
   buildNexusSwapIx,
-  discNexusSwap,
-  SPL_TOKEN_PROGRAM_ID,
-} from '../src/tx-builders/nexus-swap.js';
-import {
   buildNexusAddLiquidityIx,
-  discNexusAddLiquidity,
-} from '../src/tx-builders/nexus-add-liquidity.js';
-import {
   buildNexusRemoveLiquidityIx,
-  discNexusRemoveLiquidity,
-} from '../src/tx-builders/nexus-remove-liquidity.js';
+} from '@areal/sdk/tx';
 import type {
   LiquidityNexusState,
-  NexusAccountContext,
-  PoolAccountContext,
   PoolStateInfo,
 } from '../src/types.js';
+import type {
+  NexusAccountContext,
+  PoolAccountContext,
+} from '@areal/sdk/tx';
+
+// Test-local constants — historically lived in `src/tx-builders/*.ts`
+// alongside the bot-local builders that have since moved to @areal/sdk/tx.
+const SPL_TOKEN_PROGRAM_ID = new PublicKey(
+  'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+);
+const discriminator = (name: string): Buffer =>
+  createHash('sha256').update(name).digest().subarray(0, 8);
+const discNexusSwap = (): Buffer => discriminator('global:nexus_swap');
+const discNexusAddLiquidity = (): Buffer => discriminator('global:nexus_add_liquidity');
+const discNexusRemoveLiquidity = (): Buffer => discriminator('global:nexus_remove_liquidity');
 
 // =============================================================================
 // Fixture builders
