@@ -1,5 +1,6 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import { createHash } from 'node:crypto';
+import { findMerkleDistributorPda } from '@areal/sdk/pda';
 import type { FundEvent } from './types.js';
 import type { SnapshotStore } from './snapshot-store.js';
 import { logger } from './logger.js';
@@ -348,12 +349,9 @@ function decodeProgramDataLine(
   if (disc.equals(DISC_DISTRIBUTOR_FUNDED)) {
     const parsed = parseFundEventBody(body);
     if (!parsed) return null;
-    // Re-derive distributor PDA from ot_mint. Match the on-chain seed
+    // Re-derive distributor PDA from ot_mint via the canonical SDK helper
     // (architecture §2.2: [b"merkle_dist", ot_mint.as_ref()]).
-    const [distributor] = PublicKey.findProgramAddressSync(
-      [Buffer.from('merkle_dist'), parsed.otMint.toBuffer()],
-      programId,
-    );
+    const [distributor] = findMerkleDistributorPda(parsed.otMint, programId);
     return {
       kind: 'DistributorFunded',
       distributor,

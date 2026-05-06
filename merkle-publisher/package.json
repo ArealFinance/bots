@@ -11,6 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@areal/sdk": "file:../../sdk",
     "@aws-sdk/client-kms": "^3.1032.0",
     "@google-cloud/kms": "^5.4.0",
     "@solana/web3.js": "^1.95.0",

@@ -19,11 +19,26 @@ import {
 import { parseRpcEndpoints } from '../src/config.js';
 import { decideClaim, SingleFlightLock } from '../src/crank.js';
 import {
-  deriveClaimStatusPda,
-  deriveDistributorPda,
-  deriveOtTreasuryPda,
-  deriveRwtVaultPda,
-} from '../src/pdas.js';
+  findClaimStatusPda,
+  findMerkleDistributorPda,
+  findOtTreasuryPda,
+  findRwtVaultPda,
+} from '@areal/sdk/pda';
+
+// Adapter shims that preserve the legacy single-PublicKey return shape used
+// throughout this test. SDK now returns [PublicKey, number] tuples; we destructure.
+const deriveRwtVaultPda = (programId: PublicKey): PublicKey =>
+  findRwtVaultPda(programId)[0];
+const deriveDistributorPda = (otMint: PublicKey, programId: PublicKey): PublicKey =>
+  findMerkleDistributorPda(otMint, programId)[0];
+const deriveOtTreasuryPda = (otMint: PublicKey, programId: PublicKey): PublicKey =>
+  findOtTreasuryPda(otMint, programId)[0];
+const deriveClaimStatusPda = (args: {
+  distributor: PublicKey;
+  claimant: PublicKey;
+  ydProgramId: PublicKey;
+}): PublicKey =>
+  findClaimStatusPda(args.distributor, args.claimant, args.ydProgramId)[0];
 import { decodeProofNodes, parseProofJson, ProofFetcher } from '../src/proof-fetcher.js';
 
 const YD_PROGRAM = new PublicKey('YLD9EBikcTmVCnVzdx6vuNajrDkp8tyCAgZrqTwmMXF');

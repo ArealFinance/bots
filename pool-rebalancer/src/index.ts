@@ -1,4 +1,5 @@
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
+import { findBinArrayPda, findRwtVaultPda } from '@areal/sdk/pda';
 import { CONFIG } from './config.js';
 import { Rebalancer } from './rebalancer.js';
 import * as fs from 'fs';
@@ -41,13 +42,9 @@ async function main() {
       const pools = await discoverConcentratedPools(connection, dexProgramId);
       console.log(`[pool-rebalancer] Found ${pools.length} concentrated pool(s)`);
 
-      // Derive RWT vault PDA (from RWT Engine program)
-      // This will need adjustment based on actual RWT Engine deployment
+      // Derive RWT vault PDA (from RWT Engine program) via SDK helper.
       const rwtVaultPda = CONFIG.RWT_ENGINE_PROGRAM_ID
-        ? PublicKey.findProgramAddressSync(
-            [Buffer.from('rwt_vault')],
-            new PublicKey(CONFIG.RWT_ENGINE_PROGRAM_ID),
-          )[0]
+        ? findRwtVaultPda(new PublicKey(CONFIG.RWT_ENGINE_PROGRAM_ID))[0]
         : null;
 
       if (!rwtVaultPda) {
@@ -119,11 +116,8 @@ async function discoverConcentratedPools(
     const binStepBps = data.readUInt16LE(offset + 1 + 32 + 32 + 32 + 32 + 8 + 8 + 16 + 2 + 1 + 8);
     const activeBinId = data.readInt32LE(offset + 1 + 32 + 32 + 32 + 32 + 8 + 8 + 16 + 2 + 1 + 8 + 2);
 
-    // Derive BinArray PDA
-    const [binArrayPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from('bins'), pubkey.toBuffer()],
-      programId,
-    );
+    // Derive BinArray PDA via SDK helper.
+    const [binArrayPda] = findBinArrayPda(pubkey, programId);
 
     pools.push({
       address: pubkey,

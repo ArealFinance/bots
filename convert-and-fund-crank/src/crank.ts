@@ -11,6 +11,7 @@ import {
 import type { BotConfig } from './config.js';
 import type { CheckpointStore } from './checkpoint.js';
 import type { ConvertContext, ConvertDecision } from './types.js';
+import { findAssociatedTokenAddressPda } from '@areal/sdk/pda';
 import {
   deriveAccumulatorPda,
   deriveDexConfigPda,
@@ -135,23 +136,15 @@ export async function readConvertContext(args: {
   }
 }
 
-const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
-const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-
 /**
- * Local re-implementation of `getAssociatedTokenAddress` so we don't pull in
- * @solana/spl-token (smaller dep tree). Same algorithm: PDA of
- *   [owner, TOKEN_PROGRAM, mint] under ASSOCIATED_TOKEN_PROGRAM.
+ * Resolve the Associated Token Account for `(owner, mint)`. Async-typed for
+ * historical caller compatibility — the SDK's PDA derivation is synchronous.
  */
 export async function getAssociatedTokenAddress(
   mint: PublicKey,
   owner: PublicKey,
 ): Promise<PublicKey> {
-  const [ata] = PublicKey.findProgramAddressSync(
-    [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-  );
-  return ata;
+  return findAssociatedTokenAddressPda(owner, mint)[0];
 }
 
 /**

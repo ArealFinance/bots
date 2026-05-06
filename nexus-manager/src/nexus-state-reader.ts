@@ -24,19 +24,17 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 
 import { consensusRead, type MultiRpcClient } from '@areal/bots-shared';
+import {
+  findDexConfigPda,
+  findLiquidityNexusPda,
+  findLpPositionPda,
+} from '@areal/sdk/pda';
 
 import type {
   LiquidityNexusState,
   LpPositionState,
   PoolStateInfo,
 } from './types.js';
-
-/** PDA seed for the singleton `LiquidityNexus`. */
-export const LIQUIDITY_NEXUS_SEED = Buffer.from('liquidity_nexus');
-/** PDA seed prefix for `LpPosition` (`["lp", pool, owner]`). */
-export const LP_POSITION_SEED = Buffer.from('lp');
-/** PDA seed for the `DexConfig` singleton. */
-export const DEX_CONFIG_SEED = Buffer.from('dex_config');
 
 const LIQUIDITY_NEXUS_BODY_LEN = 50;
 const LP_POSITION_BODY_LEN = 121;
@@ -47,17 +45,16 @@ const ANCHOR_DISCRIMINATOR_LEN = 8;
 
 /**
  * Derive the singleton `LiquidityNexus` PDA address under the given DEX
- * program. Pure function — no I/O.
+ * program. Thin wrapper that adapts the SDK's `[PublicKey, number]` tuple
+ * to this bot's existing single-PublicKey return shape.
  */
 export function deriveLiquidityNexusPda(dexProgramId: PublicKey): PublicKey {
-  const [pda] = PublicKey.findProgramAddressSync([LIQUIDITY_NEXUS_SEED], dexProgramId);
-  return pda;
+  return findLiquidityNexusPda(dexProgramId)[0];
 }
 
 /** Derive `["dex_config"]` singleton under the DEX program. */
 export function deriveDexConfigPda(dexProgramId: PublicKey): PublicKey {
-  const [pda] = PublicKey.findProgramAddressSync([DEX_CONFIG_SEED], dexProgramId);
-  return pda;
+  return findDexConfigPda(dexProgramId)[0];
 }
 
 /**
@@ -69,11 +66,7 @@ export function deriveLpPositionPda(
   pool: PublicKey,
   owner: PublicKey,
 ): PublicKey {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [LP_POSITION_SEED, pool.toBuffer(), owner.toBuffer()],
-    dexProgramId,
-  );
-  return pda;
+  return findLpPositionPda(pool, owner, dexProgramId)[0];
 }
 
 /**

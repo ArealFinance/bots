@@ -6,6 +6,7 @@ import {
   TransactionInstruction,
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
+import { findDexConfigPda } from '@areal/sdk/pda';
 import { CONFIG } from './config.js';
 import { calculateNavBin, calculatePoolPrice, calculateDeviation } from './nav-calculator.js';
 
@@ -39,11 +40,8 @@ export class Rebalancer {
     this.wallet = wallet;
     this.dexProgramId = new PublicKey(CONFIG.DEX_PROGRAM_ID);
 
-    // Derive DEX config PDA
-    const [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from('dex_config')],
-      this.dexProgramId,
-    );
+    // Derive DEX config PDA via the canonical SDK helper.
+    const [configPda] = findDexConfigPda(this.dexProgramId);
     this.dexConfigPda = configPda;
   }
 

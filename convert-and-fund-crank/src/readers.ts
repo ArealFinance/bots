@@ -1,4 +1,11 @@
 import { Connection, PublicKey } from '@solana/web3.js';
+import {
+  findDexConfigPda,
+  findMerkleDistributorPda,
+  findRwtVaultPda,
+  findYdAccumulatorPda,
+  findYdConfigPda,
+} from '@areal/sdk/pda';
 import type { PoolSnapshot } from './types.js';
 
 /**
@@ -12,43 +19,24 @@ import type { PoolSnapshot } from './types.js';
 
 const SPL_TOKEN_ACCOUNT_LEN = 165;
 
-/** PDA seed for `Accumulator` (yield-distribution). */
-export const ACCUMULATOR_SEED = Buffer.from('accumulator');
-/** PDA seed for `MerkleDistributor` (yield-distribution). */
-export const MERKLE_DIST_SEED = Buffer.from('merkle_dist');
-/** PDA seed for the singleton `DistributionConfig` (yield-distribution). */
-export const DIST_CONFIG_SEED = Buffer.from('dist_config');
-/** PDA seed for the RWT engine vault (singleton). */
-export const RWT_VAULT_SEED = Buffer.from('rwt_vault');
-/** PDA seed for the RWT engine `RwtDistributionConfig` (singleton). */
-export const RWT_DIST_CONFIG_SEED = Buffer.from('dist_config_rwt');
-/** PDA seed for the DEX `DexConfig` (singleton). */
-export const DEX_CONFIG_SEED = Buffer.from('dex_config');
-
 export function deriveDexConfigPda(dexProgramId: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([DEX_CONFIG_SEED], dexProgramId)[0];
+  return findDexConfigPda(dexProgramId)[0];
 }
 
 export function deriveAccumulatorPda(otMint: PublicKey, ydProgramId: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [ACCUMULATOR_SEED, otMint.toBuffer()],
-    ydProgramId,
-  )[0];
+  return findYdAccumulatorPda(otMint, ydProgramId)[0];
 }
 
 export function deriveDistributorPda(otMint: PublicKey, ydProgramId: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [MERKLE_DIST_SEED, otMint.toBuffer()],
-    ydProgramId,
-  )[0];
+  return findMerkleDistributorPda(otMint, ydProgramId)[0];
 }
 
 export function deriveDistConfigPda(ydProgramId: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([DIST_CONFIG_SEED], ydProgramId)[0];
+  return findYdConfigPda(ydProgramId)[0];
 }
 
 export function deriveRwtVaultPda(rwtEngineProgramId: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([RWT_VAULT_SEED], rwtEngineProgramId)[0];
+  return findRwtVaultPda(rwtEngineProgramId)[0];
 }
 
 /** Read SPL Token Account `amount` (bytes 64..72 LE). */

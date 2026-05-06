@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@areal/bots-shared": "*",
+    "@areal/sdk": "file:../../sdk",
     "@solana/web3.js": "^1.95.0",
     "better-sqlite3": "^11.3.0",
     "dotenv": "^16.4.0",
