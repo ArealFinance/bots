@@ -1,0 +1,47 @@
+# Areal Observability — infrastructure alert rules (Phase 20).
+#
+# These alerts cover host-level and external-probe health.
+# Runbook URLs deliberately point at public stubs that resolve in Phase 24.
+
+groups:
+  - name: infra
+    rules:
+      - alert: DiskNearFull
+        expr: (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk near full on {{ $labels.instance }}"
+          description: "Root filesystem on {{ $labels.instance }} has less than 15% free space for over 10 minutes."
+          runbook: "https://docs.areal.finance/operations/runbooks/disk-near-full"
+
+      - alert: MemoryNearFull
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Memory near full on {{ $labels.instance }}"
+          description: "Memory utilization on {{ $labels.instance }} has exceeded 90% for over 10 minutes."
+          runbook: "https://docs.areal.finance/operations/runbooks/memory-near-full"
+
+      - alert: TLSExpirySoon
+        expr: probe_ssl_earliest_cert_expiry - time() < 14 * 24 * 3600
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate expiring soon for {{ $labels.instance }}"
+          description: "TLS certificate served by {{ $labels.instance }} expires in under 14 days."
+          runbook: "https://docs.areal.finance/operations/runbooks/tls-expiry-soon"
+
+      - alert: BlackboxProbeFailed
+        expr: probe_success == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Blackbox probe failing for {{ $labels.instance }}"
+          description: "HTTP probe of {{ $labels.instance }} has been failing for over 5 minutes."
+          runbook: "https://docs.areal.finance/operations/runbooks/blackbox-probe-failed"

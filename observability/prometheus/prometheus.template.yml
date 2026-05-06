@@ -1,0 +1,70 @@
+# Areal Observability — Prometheus configuration template (Phase 20).
+#
+# Rendered from this template by the bootstrap script via envsubst.
+# All ${VAR} references must resolve from .env.
+# Locked defaults (PROM_RETENTION_*, PROM_SCRAPE_INTERVAL) are sourced from .env
+# but documented in .env.example.
+
+global:
+  scrape_interval: ${PROM_SCRAPE_INTERVAL}
+  scrape_timeout: 10s
+  external_labels:
+    env: "${AREAL_ENV}"
+    cluster: "${AREAL_CLUSTER}"
+
+rule_files:
+  - 'rules/*.yml'
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'localhost:9093'
+
+scrape_configs:
+  # Prometheus self-scrape
+  - job_name: prometheus
+    static_configs:
+      - targets:
+          - 'localhost:9090'
+
+  # Host metrics from node-exporter (binds 127.0.0.1:9100 on the host)
+  - job_name: node
+    static_configs:
+      - targets:
+          - 'localhost:9100'
+
+  # Blackbox HTTP probes for public endpoints
+  - job_name: blackbox-http
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - '${BLACKBOX_TARGET_PANEL}'
+          - '${BLACKBOX_TARGET_APP}'
+          - '${BLACKBOX_TARGET_RPC}'
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: localhost:9115
+
+  # Phase 21 — uncomment when bot instrumentation lands
+  # - job_name: bots
+  #   static_configs:
+  #     - targets:
+  #         - 'localhost:9101'   # crank: revenue-collector
+  #         - 'localhost:9102'   # crank: distributor
+  #         - 'localhost:9103'   # crank: converter
+  #         - 'localhost:9104'   # crank: publisher
+  #         - 'localhost:9105'   # crank: nexus
+  #         - 'localhost:9106'   # crank: liquidity-hub
+
+  # Phase 22 — uncomment when chain-invariants exporter lands
+  # - job_name: chain-invariants
+  #   static_configs:
+  #     - targets:
+  #         - 'localhost:9201'
