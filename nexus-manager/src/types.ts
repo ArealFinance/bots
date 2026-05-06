@@ -107,37 +107,11 @@ export type Decision =
     };
 
 /**
- * Account context required to build any of the Nexus ix's. Resolved once
- * per cycle from on-chain state + config.
+ * Account contexts for Nexus ix's are now re-exported from `@areal/sdk/tx`
+ * (Phase 4 R3.B1). The SDK definitions match this bot's prior shape exactly;
+ * keeping a single source of truth eliminates drift.
  */
-export interface NexusAccountContext {
-  /** DEX program ID (vanity `DEX8...`). */
-  dexProgramId: PublicKey;
-  /** `["dex_config"]` singleton. */
-  dexConfig: PublicKey;
-  /** `["liquidity_nexus"]` singleton. */
-  liquidityNexus: PublicKey;
-  /** Manager wallet — Tx signer. */
-  manager: PublicKey;
-  /** Areal Finance fee destination — RWT ATA per `dex_config.areal_fee_destination`. */
-  arealFeeAccount: PublicKey;
-  /** Nexus-owned USDC ATA. */
-  nexusUsdcAta: PublicKey;
-  /** Nexus-owned RWT ATA. */
-  nexusRwtAta: PublicKey;
-}
-
-/**
- * Per-pool wiring used by tx-builders. Computed once per cycle from
- * `PoolStateInfo` + the LpPosition PDA (`["lp", pool, liquidity_nexus]`).
- */
-export interface PoolAccountContext {
-  pool: PublicKey;
-  vaultA: PublicKey;
-  vaultB: PublicKey;
-  /** Nexus's `LpPosition` PDA for this pool. */
-  lpPosition: PublicKey;
-}
+export type { NexusAccountContext, PoolAccountContext } from '@areal/sdk/tx';
 
 /** Snapshot of Nexus-owned ATAs used by the decision engine. */
 export interface NexusBalances {
