@@ -7,11 +7,30 @@ import {
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
 import { findDexConfigPda } from '@areal/sdk/pda';
+import { parseRwtVault } from '@areal/sdk/rwt-engine';
 import { CONFIG } from './config.js';
 import { calculateNavBin, calculatePoolPrice, calculateDeviation } from './nav-calculator.js';
 
 const POOL_TYPE_CONCENTRATED = 1;
 const NAV_DECIMALS = 1_000_000; // RWT nav_book_value is in 6 decimals
+
+/**
+ * Decode `nav_book_value` from a raw RwtVault account buffer and convert it
+ * to the human-scale price. Returns 0 if the buffer is missing or malformed.
+ *
+ * Exposed at module scope so the regression test can pin the byte-offset
+ * contract (R3 follow-up: prior versions read u64 at offset 8, but the
+ * RwtVault layout has `total_invested_capital: u128 + total_rwt_supply: u64`
+ * before `nav_book_value`, putting it at offset 32).
+ */
+export function decodeNavPrice(data: Buffer | Uint8Array): number {
+  try {
+    const vault = parseRwtVault(data);
+    return Number(vault.navBookValue) / NAV_DECIMALS;
+  } catch {
+    return 0;
+  }
+}
 
 interface PoolInfo {
   address: PublicKey;
@@ -22,10 +41,6 @@ interface PoolInfo {
   reserveB: bigint;
   binStepBps: number;
   activeBinId: number;
-}
-
-interface RwtVaultState {
-  navBookValue: bigint;
 }
 
 export class Rebalancer {
@@ -107,16 +122,14 @@ export class Rebalancer {
       return 0;
     }
 
-    // RwtVault layout: 8 (discriminator) + ... + nav_book_value at known offset
-    // For now, read nav_book_value as u64 at a known offset
-    // This will need to be adjusted based on actual RwtVault layout
-    const data = accountInfo.data;
-    if (data.length < 16) return 0;
-
-    // Read nav_book_value (u64) — offset depends on RwtVault struct layout
-    // Placeholder: assumes nav_book_value is the first u64 after discriminator
-    const navBookValue = data.readBigUInt64LE(8);
-    return Number(navBookValue) / NAV_DECIMALS;
+    // Decode through the SDK so the byte layout (8-byte discriminator +
+    // total_invested_capital u128 + total_rwt_supply u64 + nav_book_value u64
+    // at offset 32) is sourced from the same IDL as the on-chain handler.
+    const price = decodeNavPrice(accountInfo.data);
+    if (price === 0) {
+      console.warn(`[rebalancer] Failed to parse RwtVault ${rwtVaultPda.toBase58()}`);
+    }
+    return price;
   }
 
   private async executeShift(pool: PoolInfo, navBin: number): Promise<void> {
