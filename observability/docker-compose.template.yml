@@ -15,6 +15,11 @@ services:
     image: prom/prometheus:v2.55.1
     restart: unless-stopped
     networks: [obs]
+    # Maps the docker host's gateway IP to `host.docker.internal` so prometheus
+    # (in container) can scrape host-network services: node-exporter on Phase 20
+    # and bots on Phase 21+.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:9090:9090"
     volumes:
