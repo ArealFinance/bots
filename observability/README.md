@@ -146,10 +146,13 @@ bots/observability/
 └── grafana/
     ├── grafana.template.ini                  — anonymous Viewer + Explore disabled
     ├── provisioning/
-    │   ├── datasources.template.yml          — Prometheus datasource (proxy access)
-    │   └── dashboards.yml                    — dashboard provisioner (NOT a template)
+    │   ├── datasources/
+    │   │   └── datasources.template.yml      — Prometheus datasource (uid: prometheus)
+    │   └── dashboards/
+    │       └── dashboards.yml                — dashboard provisioner (NOT a template)
     └── dashboards/
-        └── infra.json                        — Infrastructure dashboard (CPU/RAM/disk/network/probes)
+        └── infra.json                        — Infrastructure dashboard (CPU/RAM/disk/network/probes;
+                                                 mounted to /etc/grafana/dashboard-files/)
 ```
 
 All `.template.*` files are rendered by the bootstrap script via `envsubst`. Only `.example` and non-template files are committed.
