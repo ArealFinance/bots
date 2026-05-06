@@ -19,27 +19,24 @@ alerting:
   alertmanagers:
     - static_configs:
         - targets:
-            # Resolved by docker-compose service DNS on the `obs` bridge network.
-            - 'alertmanager:9093'
+            - 'localhost:9093'
 
 scrape_configs:
-  # Prometheus self-scrape (container-internal loopback)
+  # Prometheus self-scrape.
   - job_name: prometheus
     static_configs:
       - targets:
           - 'localhost:9090'
 
-  # Host metrics from node-exporter.
-  # node-exporter runs in `network_mode: host` and binds 127.0.0.1:9100 on the host;
-  # prometheus reaches it via host-gateway alias declared in docker-compose extra_hosts.
+  # Host metrics from node-exporter (host network mode, binds 127.0.0.1:9100).
   - job_name: node
     static_configs:
       - targets:
-          - 'host.docker.internal:9100'
+          - 'localhost:9100'
 
   # Blackbox HTTP probes for public endpoints.
-  # `replacement` rewrites the scrape target back to the blackbox-exporter container,
-  # which is reachable by docker-compose service DNS on the `obs` bridge network.
+  # `replacement` rewrites the scrape target back to the blackbox-exporter
+  # listening on 127.0.0.1:9115 (also host network mode).
   - job_name: blackbox-http
     metrics_path: /probe
     params:
@@ -55,23 +52,23 @@ scrape_configs:
       - source_labels: [__param_target]
         target_label: instance
       - target_label: __address__
-        replacement: blackbox-exporter:9115
+        replacement: localhost:9115
 
   # Phase 21 — uncomment when bot instrumentation lands.
-  # Bots run on the host (NOT in compose), each binding 127.0.0.1:910X.
-  # Prometheus reaches them via host-gateway alias declared in extra_hosts.
+  # Each crank binds 127.0.0.1:910X on the host; prometheus shares host
+  # network namespace, so localhost:910X works directly.
   # - job_name: bots
   #   static_configs:
   #     - targets:
-  #         - 'host.docker.internal:9101'   # crank: revenue-collector
-  #         - 'host.docker.internal:9102'   # crank: distributor
-  #         - 'host.docker.internal:9103'   # crank: converter
-  #         - 'host.docker.internal:9104'   # crank: publisher
-  #         - 'host.docker.internal:9105'   # crank: nexus
-  #         - 'host.docker.internal:9106'   # crank: liquidity-hub
+  #         - 'localhost:9101'   # merkle-publisher
+  #         - 'localhost:9102'   # revenue-crank
+  #         - 'localhost:9103'   # pool-rebalancer
+  #         - 'localhost:9104'   # convert-and-fund-crank
+  #         - 'localhost:9105'   # yield-claim-crank
+  #         - 'localhost:9106'   # nexus-manager
 
   # Phase 22 — uncomment when chain-invariants exporter lands.
   # - job_name: chain-invariants
   #   static_configs:
   #     - targets:
-  #         - 'host.docker.internal:9201'
+  #         - 'localhost:9201'

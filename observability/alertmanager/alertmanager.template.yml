@@ -1,16 +1,12 @@
 # Areal Observability — Alertmanager configuration template (Phase 20).
 #
-# Rendered by bootstrap via envsubst. SMTP block is inert when SMTP_* vars
-# are blank (Alertmanager tolerates blank SMTP fields when no email receiver
-# references them — Phase 20 only routes via Telegram).
+# Rendered by bootstrap via envsubst. Phase 20 routes exclusively via
+# Telegram; SMTP / Slack receivers are deferred to a later phase to
+# keep this template minimal and `amtool check-config`-clean even with
+# all optional env vars blank.
 
 global:
   resolve_timeout: 5m
-  smtp_smarthost: "${SMTP_HOST}:${SMTP_PORT}"
-  smtp_from: "${SMTP_FROM}"
-  smtp_auth_username: "${SMTP_USER}"
-  smtp_auth_password: "${SMTP_PASSWORD}"
-  smtp_require_tls: true
 
 route:
   receiver: telegram-warning
