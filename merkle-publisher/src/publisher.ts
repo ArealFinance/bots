@@ -5,6 +5,7 @@ import {
   TransactionInstruction,
 } from '@solana/web3.js';
 import { createHash } from 'node:crypto';
+import { findYdConfigPda } from '@areal/sdk/pda';
 import type { BotConfig } from './config.js';
 import type { KmsSigner } from './kms-signer.js';
 import type { ProofStore } from './proof-store.js';
@@ -276,10 +277,7 @@ export class Publisher {
     root: Uint8Array,
     maxTotalClaim: bigint,
   ): Promise<string> {
-    const [configPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from('dist_config')],
-      this.cfg.ydProgramId,
-    );
+    const [configPda] = findYdConfigPda(this.cfg.ydProgramId);
 
     const ix = buildPublishRootInstruction({
       programId: this.cfg.ydProgramId,
