@@ -1,0 +1,78 @@
+# Areal Observability — docker-compose template (Phase 20).
+#
+# Rendered by bootstrap (envsubst) into docker-compose.yml.
+# All host-side ports bind 127.0.0.1 only. node-exporter uses host network mode
+# for accurate metrics; --web.listen-address pins it to 127.0.0.1:9100.
+
+version: '3.8'
+
+networks:
+  obs:
+    driver: bridge
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    restart: unless-stopped
+    networks: [obs]
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
+      - prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=${PROM_RETENTION_TIME}
+      - --storage.tsdb.retention.size=${PROM_RETENTION_SIZE}
+      - --web.listen-address=0.0.0.0:9090
+      - --web.enable-lifecycle
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    networks: [obs]
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    restart: unless-stopped
+    networks: [obs]
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./grafana/grafana.ini:/etc/grafana/grafana.ini:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on: [prometheus]
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - --path.procfs=/host/proc
+      - --path.sysfs=/host/sys
+      - --path.rootfs=/rootfs
+      - --web.listen-address=127.0.0.1:9100
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    restart: unless-stopped
+    networks: [obs]
+    ports:
+      - "127.0.0.1:9115:9115"
+
+volumes:
+  prometheus-data:
+  grafana-data:
