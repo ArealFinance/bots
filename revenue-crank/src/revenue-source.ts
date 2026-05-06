@@ -1,4 +1,5 @@
 import { Connection, PublicKey } from '@solana/web3.js';
+import { findRevenueAccountPda, findRevenueConfigPda } from '@areal/sdk/pda';
 import type { RevenueAccount, RevenueConfig, RevenueDestination } from './types.js';
 
 /**
@@ -8,29 +9,20 @@ import type { RevenueAccount, RevenueConfig, RevenueDestination } from './types.
  * unit-tested without spinning up a Solana RPC.
  */
 
-/** Layer 8 — `RevenueAccount` PDA seed prefix. */
-export const REVENUE_ACCOUNT_SEED = Buffer.from('revenue');
-/** Layer 8 — `RevenueConfig` PDA seed prefix. */
-export const REVENUE_CONFIG_SEED = Buffer.from('revenue_config');
-
 /** SPL Token v1 ACCOUNT layout (length-checked before indexing). */
 const SPL_TOKEN_ACCOUNT_LEN = 165;
 
 /**
  * Derive (RevenueAccount, RevenueConfig) PDA pair for a given OT mint.
+ * Thin wrapper over the SDK's `findRevenue*Pda` helpers — preserves the
+ * historical bot-local return shape consumed by `crank.ts` and tests.
  */
 export function deriveRevenuePdas(
   otMint: PublicKey,
   otProgramId: PublicKey,
 ): { revenueAccount: PublicKey; revenueConfig: PublicKey } {
-  const [revenueAccount] = PublicKey.findProgramAddressSync(
-    [REVENUE_ACCOUNT_SEED, otMint.toBuffer()],
-    otProgramId,
-  );
-  const [revenueConfig] = PublicKey.findProgramAddressSync(
-    [REVENUE_CONFIG_SEED, otMint.toBuffer()],
-    otProgramId,
-  );
+  const [revenueAccount] = findRevenueAccountPda(otMint, otProgramId);
+  const [revenueConfig] = findRevenueConfigPda(otMint, otProgramId);
   return { revenueAccount, revenueConfig };
 }
 
