@@ -64,6 +64,7 @@ import {
   buildNexusRemoveLiquidityTx,
   buildNexusSwapTx,
 } from '@areal/sdk/tx';
+import { findAssociatedTokenAddressPda } from '@areal/sdk/pda';
 import type {
   Decision,
   NexusAccountContext,
@@ -417,8 +418,8 @@ export function resolveBaseCtx(cfg: ManagerConfig): NexusAccountContext {
     // and does not fail the cycle when the fee account is the manager
     // itself; production resolves via `readDexConfig` at startup.
     arealFeeAccount: cfg.managerKeypair.publicKey,
-    nexusUsdcAta: deriveAssociatedTokenAccount(liquidityNexus, cfg.usdcMint),
-    nexusRwtAta: deriveAssociatedTokenAccount(liquidityNexus, cfg.rwtMint),
+    nexusUsdcAta: findAssociatedTokenAddressPda(liquidityNexus, cfg.usdcMint)[0],
+    nexusRwtAta: findAssociatedTokenAddressPda(liquidityNexus, cfg.rwtMint)[0],
   };
 }
 
@@ -507,29 +508,6 @@ function decisionArgsForLog(decision: Decision): unknown {
     default:
       return null;
   }
-}
-
-/**
- * Derive an Associated Token Account address. We do NOT depend on
- * `@solana/spl-token` to keep the dependency footprint at @solana/web3.js
- * + better-sqlite3 + zod + dotenv — the ATA derivation is a 3-seed
- * `findProgramAddress` so doing it inline is trivial.
- *
- * Seed: `[owner, TOKEN_PROGRAM, mint]` under the ATA program ID.
- */
-const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey(
-  'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL',
-);
-const TOKEN_PROGRAM_ID = new PublicKey(
-  'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
-);
-
-function deriveAssociatedTokenAccount(owner: PublicKey, mint: PublicKey): PublicKey {
-  const [ata] = PublicKey.findProgramAddressSync(
-    [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
-    ASSOCIATED_TOKEN_PROGRAM_ID,
-  );
-  return ata;
 }
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
