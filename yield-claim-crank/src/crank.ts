@@ -18,12 +18,14 @@ import type { CheckpointStore, ClaimKind } from './checkpoint.js';
 import type { ClaimDecision, ProofFile } from './types.js';
 import { ProofFetcher } from './proof-fetcher.js';
 import {
-  buildDexCompoundIx,
-  buildOtTreasuryClaimIx,
-  buildRwtClaimYieldIx,
   proofFileToArgs,
   wrapClaimTx,
 } from './claim-builders.js';
+import {
+  buildDexCompoundIx,
+  buildOtTreasuryClaimIx,
+  buildRwtClaimYieldIx,
+} from '@areal/sdk/tx';
 import {
   findClaimStatusPda,
   findMerkleDistributorPda,
