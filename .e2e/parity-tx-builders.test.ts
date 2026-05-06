@@ -18,6 +18,9 @@
  *   - claim_yield (RWT)        (crank vs dashboard-equivalent)
  *   - compound_yield (DEX)     (crank vs dashboard-equivalent)
  *   - claim_yd_for_treasury    (crank vs dashboard-equivalent)
+ *   - distribute_revenue (OT)  (crank vs dashboard-equivalent)
+ *   - publish_root (YD)        (crank vs dashboard-equivalent)
+ *   - shift_liquidity (DEX)    (crank vs dashboard-equivalent)
  *   - withdraw_liquidity_holding (gated R20 — see end of file)
  *
  * Methodology:
@@ -50,9 +53,11 @@ import {
   buildRwtClaimYieldIx,
   buildDexCompoundIx,
   buildOtTreasuryClaimIx,
+  buildDistributeRevenueIx,
   type BuildRwtClaimYieldArgs as BuildRwtClaimArgs,
   type BuildDexCompoundArgs,
   type BuildOtTreasuryClaimArgs,
+  type BuildDistributeRevenueArgs,
 } from '@areal/sdk/tx';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -380,6 +385,50 @@ test('parity claim_yd_for_treasury: crank ix == dashboard-style ix', async () =>
 });
 
 // ============================================================================
+// distribute_revenue (OT::distribute_revenue)
+// ============================================================================
+
+test('parity distribute_revenue: crank ix == dashboard-style ix', async () => {
+  const dest1 = pkFromByte(70);
+  const dest2 = pkFromByte(71);
+  const dest3 = pkFromByte(72);
+  const args: BuildDistributeRevenueArgs = {
+    otProgramId: pk('ot_program'),
+    crank: pk('signer'),
+    otMint: pk('ot_mint'),
+    revenueAccount: pkFromByte(80),
+    revenueTokenAccount: pkFromByte(81),
+    revenueConfig: pkFromByte(82),
+    arealFeeDestination: pk('fee_account'),
+    destinations: [dest1, dest2, dest3],
+  };
+
+  const built = buildDistributeRevenueIx(args);
+
+  const disc = await discWeb('distribute_revenue');
+  const data = new Uint8Array(disc); // no args body
+
+  const dashIx = new TransactionInstruction({
+    programId: args.otProgramId,
+    data: Buffer.from(data),
+    keys: [
+      { pubkey: args.crank, isSigner: true, isWritable: true },
+      { pubkey: args.otMint, isSigner: false, isWritable: false },
+      { pubkey: args.revenueAccount, isSigner: false, isWritable: true },
+      { pubkey: args.revenueTokenAccount, isSigner: false, isWritable: true },
+      { pubkey: args.revenueConfig, isSigner: false, isWritable: false },
+      { pubkey: args.arealFeeDestination, isSigner: false, isWritable: true },
+      { pubkey: SPL_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: dest1, isSigner: false, isWritable: true },
+      { pubkey: dest2, isSigner: false, isWritable: true },
+      { pubkey: dest3, isSigner: false, isWritable: true },
+    ],
+  });
+
+  assertIxEqual(built, dashIx);
+});
+
+// ============================================================================
 // withdraw_liquidity_holding — gated R20.
 //
 // The crank has no production builder for this ix (deferred to the dashboard
@@ -550,6 +599,26 @@ async function buildAllFingerprints(): Promise<Record<string, string>> {
     };
     const built = buildOtTreasuryClaimIx(args);
     out['claim_yd_for_treasury'] = fingerprintIx('claim_yd_for_treasury', {
+      programId: built.programId,
+      data: Buffer.from(built.data),
+      keys: built.keys,
+    });
+  }
+
+  // distribute_revenue
+  {
+    const args: BuildDistributeRevenueArgs = {
+      otProgramId: pk('ot_program'),
+      crank: pk('signer'),
+      otMint: pk('ot_mint'),
+      revenueAccount: pkFromByte(80),
+      revenueTokenAccount: pkFromByte(81),
+      revenueConfig: pkFromByte(82),
+      arealFeeDestination: pk('fee_account'),
+      destinations: [pkFromByte(70), pkFromByte(71), pkFromByte(72)],
+    };
+    const built = buildDistributeRevenueIx(args);
+    out['distribute_revenue'] = fingerprintIx('distribute_revenue', {
       programId: built.programId,
       data: Buffer.from(built.data),
       keys: built.keys,

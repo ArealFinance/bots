@@ -11,7 +11,8 @@ import {
   SingleFlightLock,
 } from '../src/crank.js';
 import { parseRpcEndpoints } from '../src/config.js';
-import { discDistributeRevenue, buildDistributeRevenueIx } from '../src/distributor.js';
+import { buildDistributeRevenueIx } from '../src/distributor.js';
+import { DISTRIBUTE_REVENUE_DISCRIMINATOR } from '@areal/sdk/ownership-token';
 import {
   deriveRevenuePdas,
   parseRevenueAccount,
@@ -202,9 +203,12 @@ describe('PDA derivation + ix builder', () => {
   });
 
   it('discriminator equals sha256("global:distribute_revenue")[..8]', () => {
-    const disc = discDistributeRevenue();
+    // SDK ships the discriminator as a Uint8Array; re-compute the Anchor
+    // sha256("global:<name>")[..8] form here and assert byte equality so any
+    // drift between the IDL codegen and the on-chain naming convention
+    // surfaces as a test failure.
+    const disc = Buffer.from(DISTRIBUTE_REVENUE_DISCRIMINATOR);
     expect(disc.length).toBe(8);
-    // Re-compute and assert byte equality (catches accidental drift).
     const { createHash } = require('node:crypto') as typeof import('node:crypto');
     const expected = createHash('sha256').update('global:distribute_revenue').digest().subarray(0, 8);
     expect(disc.equals(expected)).toBe(true);
