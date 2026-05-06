@@ -201,7 +201,11 @@ test('parity convert_to_rwt: crank ix == dashboard-style ix', async () => {
       { pubkey: args.accumulatorRwtAta, isSigner: false, isWritable: true },
       { pubkey: args.feeAccount, isSigner: false, isWritable: true },
       { pubkey: args.rewardVault, isSigner: false, isWritable: true },
-      { pubkey: args.rwtMint, isSigner: false, isWritable: false },
+      // R-2: rwt_mint MUST be writable — the inner cpi_rwt_mint CPI invokes
+      // RWT::mint_rwt which mutates the mint's supply field. CPI cannot
+      // escalate writable privilege; matched against the SDK builder which is
+      // the single source of truth (Phase 4.1 B.1.1).
+      { pubkey: args.rwtMint, isSigner: false, isWritable: true },
       { pubkey: args.dexConfig, isSigner: false, isWritable: false },
       { pubkey: args.poolState, isSigner: false, isWritable: true },
       { pubkey: args.dexPoolVaultIn, isSigner: false, isWritable: true },
