@@ -280,6 +280,26 @@ describe('checkMerkleRootAge', () => {
     if (!out.ok) expect(out.error).toMatch(/distributor_account_missing/);
   });
 
+  // I2 — defense-in-depth: distributor PDA exists and bytes decode, but
+  // is owned by a foreign program. Must fail before the SDK decoder runs.
+  it('returns ok:false (wrong_owner) when distributor PDA is owned by a foreign program', async () => {
+    const distributorBuf = buildMerkleDistributorBuffer({ epoch: 7n });
+    const foreignProgram = new PublicKey(
+      'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+    );
+    const { ctx } = makeConnection({
+      getSignaturesForAddress: async () => [
+        { signature: 'sig1', slot: 100, blockTime: NOW - 3600 },
+      ],
+      getAccountInfo: async () => ({ data: distributorBuf, owner: foreignProgram }),
+    });
+    const out = await checkMerkleRootAge(ctx, { distributorPda });
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.error).toMatch(/distributor_wrong_owner/);
+      expect(out.error).toContain(foreignProgram.toBase58());
+    }
+  });
 });
 
 // ---------- Tests: checkNavAge ----------
@@ -310,6 +330,31 @@ describe('checkNavAge', () => {
     }
   });
 
+  // I2 — defense-in-depth: vault PDA exists with valid bytes but owned by
+  // a foreign program. Owner check fires before parseRwtVault.
+  it('returns ok:false (wrong_owner) when vault PDA is owned by a foreign program', async () => {
+    const vaultBuf = buildRwtVaultBuffer({
+      totalRwtSupply: 1_000_000n,
+      navBookValue: 5_500_000n,
+      authority: expectedAuthority,
+      mint: rwtMint,
+    });
+    const foreignProgram = new PublicKey(
+      'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+    );
+    const { ctx } = makeConnection({
+      getSignaturesForAddress: async () => [
+        { signature: 'navSig', slot: 200, blockTime: NOW - 7200 },
+      ],
+      getAccountInfo: async () => ({ data: vaultBuf, owner: foreignProgram }),
+    });
+    const out = await checkNavAge(ctx, { rwtVaultPda });
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.error).toMatch(/vault_wrong_owner/);
+      expect(out.error).toContain(foreignProgram.toBase58());
+    }
+  });
 });
 
 // ---------- Tests: checkAuthorities ----------
@@ -631,6 +676,38 @@ describe('checkRwtSupply', () => {
     if (!out.ok) expect(out.error).toMatch(/vault_account_missing/);
   });
 
+  // I2 — defense-in-depth: vault PDA exists with valid bytes but owned by
+  // a foreign program. Owner check fires before parseRwtVault, so we never
+  // even reach the getTokenSupply call.
+  it('returns ok:false (wrong_owner) when vault PDA is owned by a foreign program', async () => {
+    const vaultBuf = buildRwtVaultBuffer({
+      totalRwtSupply: 1_000_000n,
+      navBookValue: 0n,
+      authority: expectedAuthority,
+      mint: rwtMint,
+    });
+    const foreignProgram = new PublicKey(
+      'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+    );
+    let tokenSupplyCalled = false;
+    const { ctx } = makeConnection({
+      getAccountInfo: async () => ({ data: vaultBuf, owner: foreignProgram }),
+      getTokenSupply: async () => {
+        tokenSupplyCalled = true;
+        return {
+          value: { amount: '0', decimals: 6, uiAmount: 0, uiAmountString: '0' },
+        };
+      },
+    });
+    const out = await checkRwtSupply(ctx, { rwtVaultPda });
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.error).toMatch(/vault_wrong_owner/);
+      expect(out.error).toContain(foreignProgram.toBase58());
+    }
+    // Owner check must short-circuit before the SPL mint supply RPC call.
+    expect(tokenSupplyCalled).toBe(false);
+  });
 });
 
 // ---------- Sanity: discriminator round-trip ----------

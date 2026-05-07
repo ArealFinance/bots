@@ -209,6 +209,16 @@ export async function checkMerkleRootAge(
     // Decode the distributor for the epoch label (operator context).
     const info = await ctx.connection.getAccountInfo(args.distributorPda);
     if (!info) throw new Error('distributor_account_missing');
+    // Defense-in-depth (I2): verify the account is owned by the YD
+    // program before handing the bytes to the SDK decoder. SDK
+    // discriminator validation is one layer; an explicit owner check
+    // catches the case where another program squatted the PDA address
+    // with a colliding 8-byte prefix.
+    if (!info.owner.equals(YIELD_DISTRIBUTION_PROGRAM_ID)) {
+      throw new Error(
+        `distributor_wrong_owner:${info.owner.toBase58()}`,
+      );
+    }
     const distributor = parseMerkleDistributor(info.data);
     return {
       ok: true,
@@ -243,6 +253,10 @@ export async function checkNavAge(
     );
     const info = await ctx.connection.getAccountInfo(args.rwtVaultPda);
     if (!info) throw new Error('vault_account_missing');
+    // Defense-in-depth (I2): verify owner before decoding.
+    if (!info.owner.equals(RWT_ENGINE_PROGRAM_ID)) {
+      throw new Error(`vault_wrong_owner:${info.owner.toBase58()}`);
+    }
     const vault = parseRwtVault(info.data);
     return {
       ok: true,
@@ -440,6 +454,12 @@ export async function checkRwtSupply(
   try {
     const info = await ctx.connection.getAccountInfo(args.rwtVaultPda);
     if (!info) throw new Error('vault_account_missing');
+    // Defense-in-depth (I2): verify owner before decoding. The mint
+    // supply RPC call below is independent — it queries the SPL token
+    // mint address sourced from the (now owner-verified) vault struct.
+    if (!info.owner.equals(RWT_ENGINE_PROGRAM_ID)) {
+      throw new Error(`vault_wrong_owner:${info.owner.toBase58()}`);
+    }
     const vault = parseRwtVault(info.data);
     const tracked = vault.totalRwtSupply;
     const mintPk = toPublicKey(vault.rwtMint);
