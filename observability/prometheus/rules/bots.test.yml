@@ -77,6 +77,10 @@ tests:
           - exp_labels:
               severity: warning
               bot: nexus-manager
+            exp_annotations:
+              summary: "Bot nexus-manager no progress for 30m"
+              description: "Bot nexus-manager has not recorded a successful tick in over 30 minutes."
+              runbook: "https://docs.areal.finance/operations/runbooks/bot-no-progress"
 
   - interval: 1m
     input_series:
