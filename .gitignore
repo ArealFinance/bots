@@ -60,6 +60,7 @@ nexus-manager/*.db-shm
 # Shared package build output
 shared/dist/
 shared/*.tsbuildinfo
+shared/coverage/
 
 # Layer 10 substep 4 — Phase 8 orchestrator log files. The canonical log
 # location is <repo>/data/bots/ (already covered by the root .gitignore);
