@@ -1,6 +1,6 @@
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import { findBinArrayPda, findRwtVaultPda } from '@areal/sdk/pda';
-import { createBotMetrics } from '@areal/bots-shared';
+import { createBotMetrics, logger } from '@areal/bots-shared';
 import { CONFIG } from './config.js';
 import { Rebalancer } from './rebalancer.js';
 import * as fs from 'fs';
@@ -8,24 +8,25 @@ import * as fs from 'fs';
 const POOL_TYPE_CONCENTRATED = 1;
 
 async function main() {
-  console.log('[pool-rebalancer] Starting...');
-  console.log(`[pool-rebalancer] RPC: ${CONFIG.RPC_URL}`);
-  console.log(`[pool-rebalancer] DEX Program: ${CONFIG.DEX_PROGRAM_ID}`);
-  console.log(`[pool-rebalancer] Check interval: ${CONFIG.CHECK_INTERVAL_MS}ms`);
-  console.log(`[pool-rebalancer] Threshold: ${CONFIG.REBALANCE_THRESHOLD * 100}%`);
-  console.log(`[pool-rebalancer] Target bin count: ${CONFIG.TARGET_BIN_COUNT}`);
+  logger.info('pool-rebalancer starting', {
+    rpc: CONFIG.RPC_URL,
+    dexProgram: CONFIG.DEX_PROGRAM_ID,
+    checkIntervalMs: CONFIG.CHECK_INTERVAL_MS,
+    thresholdPct: CONFIG.REBALANCE_THRESHOLD * 100,
+    targetBinCount: CONFIG.TARGET_BIN_COUNT,
+  });
 
   // Phase 21: prom-client metrics surface. BOT_METRICS_PORT is supplied by
   // scripts/lib/start-bots.ts (locked port 9103 for pool-rebalancer).
   const metricsPort = parseInt(process.env.BOT_METRICS_PORT ?? '0', 10);
   if (!metricsPort) {
-    console.error('[pool-rebalancer] BOT_METRICS_PORT env not set');
+    logger.error('BOT_METRICS_PORT env not set');
     process.exit(1);
   }
 
   // Load rebalancer keypair
   if (!CONFIG.REBALANCER_KEYPAIR) {
-    console.error('[pool-rebalancer] REBALANCER_KEYPAIR not set');
+    logger.error('REBALANCER_KEYPAIR not set');
     process.exit(1);
   }
 
@@ -34,11 +35,11 @@ async function main() {
     const keyData = JSON.parse(fs.readFileSync(CONFIG.REBALANCER_KEYPAIR, 'utf-8'));
     wallet = Keypair.fromSecretKey(new Uint8Array(keyData));
   } catch (err) {
-    console.error('[pool-rebalancer] Failed to load keypair:', err);
+    logger.error('failed to load keypair', err);
     process.exit(1);
   }
 
-  console.log(`[pool-rebalancer] Rebalancer wallet: ${wallet.publicKey.toBase58()}`);
+  logger.info('rebalancer wallet loaded', { wallet: wallet.publicKey.toBase58() });
 
   const metrics = createBotMetrics({
     bot: 'pool-rebalancer',
@@ -66,12 +67,12 @@ async function main() {
   metricsHeartbeat.unref();
 
   const onShutdown = async (signal: string): Promise<void> => {
-    console.log(`[pool-rebalancer] received ${signal}, shutting down`);
+    logger.info(`received ${signal}, shutting down`);
     clearInterval(metricsHeartbeat);
     try {
       await metrics.shutdown();
     } catch (err) {
-      console.error('[pool-rebalancer] metrics shutdown failed', err);
+      logger.error('metrics shutdown failed', err);
     }
     process.exit(0);
   };
@@ -83,7 +84,7 @@ async function main() {
     try {
       // Discover concentrated pools by scanning program accounts
       const pools = await discoverConcentratedPools(connection, dexProgramId);
-      console.log(`[pool-rebalancer] Found ${pools.length} concentrated pool(s)`);
+      logger.info('discovered concentrated pools', { count: pools.length });
 
       // Derive RWT vault PDA (from RWT Engine program) via SDK helper.
       const rwtVaultPda = CONFIG.RWT_ENGINE_PROGRAM_ID
@@ -91,18 +92,18 @@ async function main() {
         : null;
 
       if (!rwtVaultPda) {
-        console.warn('[pool-rebalancer] RWT_ENGINE_PROGRAM_ID not set, skipping rebalance');
+        logger.warn('RWT_ENGINE_PROGRAM_ID not set, skipping rebalance');
       } else {
         for (const pool of pools) {
           try {
             await rebalancer.checkAndRebalance(pool, rwtVaultPda);
           } catch (err) {
-            console.error(`[pool-rebalancer] Error checking pool ${pool.address.toBase58()}:`, err);
+            logger.error('error checking pool', err, { pool: pool.address.toBase58() });
           }
         }
       }
     } catch (err) {
-      console.error('[pool-rebalancer] Loop error:', err);
+      logger.error('loop error', err);
     }
 
     await new Promise(r => setTimeout(r, CONFIG.CHECK_INTERVAL_MS));
@@ -178,6 +179,6 @@ async function discoverConcentratedPools(
 }
 
 main().catch(err => {
-  console.error('[pool-rebalancer] Fatal error:', err);
+  logger.error('fatal error', err);
   process.exit(1);
 });
