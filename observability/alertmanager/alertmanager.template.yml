@@ -49,5 +49,8 @@ inhibit_rules:
       severity: warning
     equal: [alertname, instance]
 
-templates:
-  - '/etc/alertmanager/templates/*.tmpl'
+# Phase 24 will introduce custom alert templates (HTML formatting helpers,
+# runbook link prettifiers, etc.) and re-add a `templates:` block pointing
+# at the rendered .tmpl files. Until then the directory is not mounted, so
+# referencing it here only generates a noisy "no matches" warning on every
+# Alertmanager reload.
