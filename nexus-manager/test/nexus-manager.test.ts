@@ -16,6 +16,11 @@ import {
   buildNexusAddLiquidityIx,
   buildNexusRemoveLiquidityIx,
 } from '@areal/sdk/tx';
+import {
+  LIQUIDITYNEXUS_DISCRIMINATOR,
+  LPPOSITION_DISCRIMINATOR,
+  POOLSTATE_DISCRIMINATOR,
+} from '@areal/sdk/native-dex';
 import type {
   LiquidityNexusState,
   PoolStateInfo,
@@ -265,8 +270,8 @@ describe('parseLiquidityNexus (50-byte body)', () => {
   it('decodes manager / counters / flags / bump from raw bytes', () => {
     // 8-byte discriminator + 50-byte body
     const buf = Buffer.alloc(8 + 50);
-    // discriminator (irrelevant for parser)
-    buf.writeUInt8(0xab, 0);
+    // SDK codegen parser validates discriminator — must be the IDL-bound value.
+    Buffer.from(LIQUIDITYNEXUS_DISCRIMINATOR).copy(buf, 0);
     // body starts at offset 8
     const body = buf.subarray(8);
     Buffer.alloc(32, 1).copy(body, 0); // manager = [1; 32]
@@ -285,11 +290,19 @@ describe('parseLiquidityNexus (50-byte body)', () => {
 
   it('throws on truncated buffer', () => {
     const buf = Buffer.alloc(8 + 49); // 1 byte short
-    expect(() => parseLiquidityNexus(buf)).toThrow(/expected ≥58/);
+    Buffer.from(LIQUIDITYNEXUS_DISCRIMINATOR).copy(buf, 0);
+    expect(() => parseLiquidityNexus(buf)).toThrow();
+  });
+
+  it('throws on invalid discriminator (Phase 4.2 B.6 — IDL-bound check)', () => {
+    const buf = Buffer.alloc(8 + 50);
+    buf.writeUInt8(0xab, 0); // bogus discriminator
+    expect(() => parseLiquidityNexus(buf)).toThrow();
   });
 
   it('decodes is_active=false and zero counters', () => {
     const buf = Buffer.alloc(8 + 50);
+    Buffer.from(LIQUIDITYNEXUS_DISCRIMINATOR).copy(buf, 0);
     // body all zeros — uninitialized layout.
     const state = parseLiquidityNexus(buf);
     expect(state.totalDepositedUsdc).toBe(0n);
@@ -305,6 +318,7 @@ describe('parsePoolStateInfo (244-byte body, Layer 9 D28)', () => {
   // codegen must preserve these exact fields + types.
   it('decodes the bot-required subset: mints, vaults, reserves, shares, isActive, fee accumulators', () => {
     const buf = Buffer.alloc(8 + 244);
+    Buffer.from(POOLSTATE_DISCRIMINATOR).copy(buf, 0);
     const body = buf.subarray(8);
     body.writeUInt8(0, 0); // pool_type = Constant
     Buffer.alloc(32, 2).copy(body, 1); // token_a_mint = USDC_MINT
@@ -347,6 +361,7 @@ describe('parsePoolStateInfo (244-byte body, Layer 9 D28)', () => {
 
   it('decodes is_active=false', () => {
     const buf = Buffer.alloc(8 + 244);
+    Buffer.from(POOLSTATE_DISCRIMINATOR).copy(buf, 0);
     const body = buf.subarray(8);
     Buffer.alloc(32, 2).copy(body, 1);
     Buffer.alloc(32, 3).copy(body, 33);
@@ -361,6 +376,7 @@ describe('parsePoolStateInfo (244-byte body, Layer 9 D28)', () => {
 describe('parseLpPosition (121-byte body, Layer 9 D28)', () => {
   it('decodes shares + Q64.64 fee snapshots', () => {
     const buf = Buffer.alloc(8 + 121);
+    Buffer.from(LPPOSITION_DISCRIMINATOR).copy(buf, 0);
     const body = buf.subarray(8);
     Buffer.alloc(32, 4).copy(body, 0); // pool
     Buffer.alloc(32, 7).copy(body, 32); // owner = nexus
@@ -386,6 +402,7 @@ describe('parseLpPosition (121-byte body, Layer 9 D28)', () => {
 
   it('decodes large u128 fees_claimed_per_share via hi/lo splice', () => {
     const buf = Buffer.alloc(8 + 121);
+    Buffer.from(LPPOSITION_DISCRIMINATOR).copy(buf, 0);
     const body = buf.subarray(8);
     // fees_claimed_per_share_a = (3 << 64) + 7 — exercises the hi-word read.
     body.writeBigUInt64LE(7n, 89);

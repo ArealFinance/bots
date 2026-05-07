@@ -1,8 +1,13 @@
 /**
  * On-chain reads for the nexus-manager bot.
  *
- * The exported parsers are pure functions over `Buffer` slices so they can
- * be unit-tested without spinning up a Solana RPC.
+ * The exported parsers are thin adapters over `@areal/sdk/native-dex`
+ * codegen parsers (Phase 4.2 B.6 — SDK ships first-class parsers since
+ * Phase 3.5). The bot's wrappers add two things on top of the SDK output:
+ *   1. Convert IDL `[u8; 32]` byte arrays to `PublicKey` instances so
+ *      downstream consumers keep `.equals` / `.toBuffer` ergonomics.
+ *   2. Project the bot's narrow `PoolStateInfo` subset (the decision
+ *      engine never reads bin/treasury fields).
  *
  * Critical-state reads (`readLiquidityNexus`) use {@link consensusRead} from
  * `@areal/bots-shared` so that a single misbehaving RPC cannot cause the bot
@@ -10,15 +15,12 @@
  * scans) fall back to a single-endpoint primary because per-pool drift is
  * tolerated by the on-chain re-validation inside each Nexus ix.
  *
- * Layout sources:
- *   - `LiquidityNexus`: 8-byte arlex discriminator + 50-byte body
- *     (32 manager + 8 total_deposited_usdc + 8 total_deposited_rwt + 1
- *     is_active + 1 bump). See `contracts/native-dex/src/state.rs`.
- *   - `LpPosition`:    8 + 121 bytes (32 pool + 32 owner + 16 shares +
- *     8 last_update_ts + 1 bump + 16 fees_claimed_per_share_a + 16
- *     fees_claimed_per_share_b).
- *   - `PoolState`:     8 + 244 bytes (Layer 9 D28 layout).
- *   - SPL Token Account: 165 bytes (`amount` at bytes 64..72 LE).
+ * Layout sources (see `contracts/native-dex/src/state.rs`):
+ *   - `LiquidityNexus`: 8-byte arlex discriminator + 50-byte body.
+ *   - `LpPosition`:    8 + 121 bytes (Layer 9 D28).
+ *   - `PoolState`:     8 + 244 bytes (Layer 9 D28).
+ *   - SPL Token Account: 165 bytes (`amount` at bytes 64..72 LE) — the only
+ *     non-program-account read still done locally.
  */
 
 import { Connection, PublicKey } from '@solana/web3.js';
@@ -29,6 +31,11 @@ import {
   findLiquidityNexusPda,
   findLpPositionPda,
 } from '@areal/sdk/pda';
+import {
+  parseLiquidityNexus as sdkParseLiquidityNexus,
+  parseLpPosition as sdkParseLpPosition,
+  parsePoolState as sdkParsePoolState,
+} from '@areal/sdk/native-dex';
 
 import type {
   LiquidityNexusState,
@@ -36,12 +43,7 @@ import type {
   PoolStateInfo,
 } from './types.js';
 
-const LIQUIDITY_NEXUS_BODY_LEN = 50;
-const LP_POSITION_BODY_LEN = 121;
-const POOL_STATE_BODY_LEN = 244;
 const SPL_TOKEN_ACCOUNT_LEN = 165;
-
-const ANCHOR_DISCRIMINATOR_LEN = 8;
 
 /**
  * Derive the singleton `LiquidityNexus` PDA address under the given DEX
@@ -70,8 +72,27 @@ export function deriveLpPositionPda(
 }
 
 /**
+ * Convert a 32-byte array (Bytes32, as returned by the SDK codegen runtime
+ * for IDL `[u8; 32]` fields) into a `PublicKey` instance. The SDK declares
+ * these fields as `PublicKey` in TypeScript but the runtime returns raw
+ * `number[]` because the IDL spells them as byte arrays — this adapter
+ * bridges the gap so downstream code keeps the `PublicKey` API
+ * (`.equals`, `.toBuffer`, `.toBase58`).
+ */
+function toPublicKey(bytes: number[] | Uint8Array | PublicKey): PublicKey {
+  if (bytes instanceof PublicKey) return bytes;
+  return new PublicKey(Uint8Array.from(bytes as Iterable<number>));
+}
+
+/**
  * Parse `LiquidityNexus` raw account data (8-byte discriminator + 50-byte
- * body). Throws on length mismatch — caller must catch.
+ * body). Validates the IDL discriminator and throws on mismatch or length
+ * underflow — caller must catch.
+ *
+ * Phase 4.2 B.6 — delegates to `@areal/sdk/native-dex` codegen parser
+ * (Phase 3.5 unblocked SDK first-class parsers). The SDK returns `manager`
+ * as a 32-byte array (IDL `[u8; 32]`); we adapt it to `PublicKey` so the
+ * existing comparator + downstream consumers keep their API.
  *
  * Layout (per `contracts/native-dex/src/state.rs::LiquidityNexus`):
  *   manager              [u8;32]  → 0..32
@@ -81,28 +102,21 @@ export function deriveLpPositionPda(
  *   bump                 u8       → 49
  */
 export function parseLiquidityNexus(data: Buffer): LiquidityNexusState {
-  if (data.length < ANCHOR_DISCRIMINATOR_LEN + LIQUIDITY_NEXUS_BODY_LEN) {
-    throw new Error(
-      `LiquidityNexus: expected ≥${ANCHOR_DISCRIMINATOR_LEN + LIQUIDITY_NEXUS_BODY_LEN} bytes, got ${data.length}`,
-    );
-  }
-  const body = data.subarray(ANCHOR_DISCRIMINATOR_LEN);
-  const manager = new PublicKey(body.subarray(0, 32));
-  const totalDepositedUsdc = body.readBigUInt64LE(32);
-  const totalDepositedRwt = body.readBigUInt64LE(40);
-  const isActive = body.readUInt8(48) !== 0;
-  const bump = body.readUInt8(49);
+  const raw = sdkParseLiquidityNexus(data);
   return {
-    manager,
-    totalDepositedUsdc,
-    totalDepositedRwt,
-    isActive,
-    bump,
+    manager: toPublicKey(raw.manager),
+    totalDepositedUsdc: raw.totalDepositedUsdc,
+    totalDepositedRwt: raw.totalDepositedRwt,
+    isActive: raw.isActive,
+    bump: raw.bump,
   };
 }
 
 /**
  * Parse `LpPosition` raw account data (8-byte discriminator + 121-byte body).
+ *
+ * Phase 4.2 B.6 — delegates to `@areal/sdk/native-dex`. SDK returns `pool`
+ * and `owner` as 32-byte arrays; adapter wraps them as `PublicKey`.
  *
  * Layout (per `contracts/native-dex/src/state.rs::LpPosition`):
  *   pool                       [u8;32] → 0..32
@@ -114,32 +128,25 @@ export function parseLiquidityNexus(data: Buffer): LiquidityNexusState {
  *   fees_claimed_per_share_b   u128    → 105..121
  */
 export function parseLpPosition(data: Buffer): LpPositionState {
-  if (data.length < ANCHOR_DISCRIMINATOR_LEN + LP_POSITION_BODY_LEN) {
-    throw new Error(
-      `LpPosition: expected ≥${ANCHOR_DISCRIMINATOR_LEN + LP_POSITION_BODY_LEN} bytes, got ${data.length}`,
-    );
-  }
-  const body = data.subarray(ANCHOR_DISCRIMINATOR_LEN);
-  const pool = new PublicKey(body.subarray(0, 32));
-  const owner = new PublicKey(body.subarray(32, 64));
-  const shares = readU128LE(body, 64);
-  const lastUpdateTs = body.readBigInt64LE(80);
-  const bump = body.readUInt8(88);
-  const feesClaimedPerShareA = readU128LE(body, 89);
-  const feesClaimedPerShareB = readU128LE(body, 105);
+  const raw = sdkParseLpPosition(data);
   return {
-    pool,
-    owner,
-    shares,
-    lastUpdateTs,
-    bump,
-    feesClaimedPerShareA,
-    feesClaimedPerShareB,
+    pool: toPublicKey(raw.pool),
+    owner: toPublicKey(raw.owner),
+    shares: raw.shares,
+    lastUpdateTs: raw.lastUpdateTs,
+    bump: raw.bump,
+    feesClaimedPerShareA: raw.feesClaimedPerShareA,
+    feesClaimedPerShareB: raw.feesClaimedPerShareB,
   };
 }
 
 /**
  * Parse the subset of `PoolState` fields the decision engine needs.
+ *
+ * Phase 4.2 B.6 — delegates to `@areal/sdk/native-dex` and projects the
+ * subset (mints, vaults, reserves, totalLpShares, isActive, fee
+ * accumulators). SDK parses all 17 fields incl. D28 LP-fee accumulators;
+ * we keep the bot's narrow surface to limit the consumer-facing change.
  *
  * Layout offsets (Layer 9 D28 — body 244 bytes):
  *   pool_type            u8       → 0
@@ -162,34 +169,19 @@ export function parseLpPosition(data: Buffer): LpPositionState {
  *   cumulative_fees_per_share_b u128 → 228..244
  */
 export function parsePoolStateInfo(data: Buffer, pool: PublicKey): PoolStateInfo {
-  if (data.length < ANCHOR_DISCRIMINATOR_LEN + POOL_STATE_BODY_LEN) {
-    throw new Error(
-      `PoolState: expected ≥${ANCHOR_DISCRIMINATOR_LEN + POOL_STATE_BODY_LEN} bytes, got ${data.length}`,
-    );
-  }
-  const body = data.subarray(ANCHOR_DISCRIMINATOR_LEN);
-  const tokenAMint = new PublicKey(body.subarray(1, 33));
-  const tokenBMint = new PublicKey(body.subarray(33, 65));
-  const vaultA = new PublicKey(body.subarray(65, 97));
-  const vaultB = new PublicKey(body.subarray(97, 129));
-  const reserveA = body.readBigUInt64LE(129);
-  const reserveB = body.readBigUInt64LE(137);
-  const totalLpShares = readU128LE(body, 145);
-  const isActive = body.readUInt8(163) !== 0;
-  const cumulativeFeesPerShareA = readU128LE(body, 212);
-  const cumulativeFesPerShareB = readU128LE(body, 228);
+  const raw = sdkParsePoolState(data);
   return {
     pool,
-    tokenAMint,
-    tokenBMint,
-    vaultA,
-    vaultB,
-    reserveA,
-    reserveB,
-    totalLpShares,
-    isActive,
-    cumulativeFeesPerShareA,
-    cumulativeFesPerShareB,
+    tokenAMint: toPublicKey(raw.tokenAMint),
+    tokenBMint: toPublicKey(raw.tokenBMint),
+    vaultA: toPublicKey(raw.vaultA),
+    vaultB: toPublicKey(raw.vaultB),
+    reserveA: raw.reserveA,
+    reserveB: raw.reserveB,
+    totalLpShares: raw.totalLpShares,
+    isActive: raw.isActive,
+    cumulativeFeesPerShareA: raw.cumulativeFeesPerShareA,
+    cumulativeFesPerShareB: raw.cumulativeFeesPerShareB,
   };
 }
 
@@ -293,12 +285,3 @@ function liquidityNexusEqual(a: LiquidityNexusState, b: LiquidityNexusState): bo
   );
 }
 
-/**
- * Read a little-endian u128 from a Buffer at `offset`. Node has no native
- * `readBigUInt128LE`, so we splice two u64 reads.
- */
-function readU128LE(buf: Buffer, offset: number): bigint {
-  const lo = buf.readBigUInt64LE(offset);
-  const hi = buf.readBigUInt64LE(offset + 8);
-  return (hi << 64n) | lo;
-}
