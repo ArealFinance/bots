@@ -15,7 +15,8 @@
     "revenue-crank",
     "convert-and-fund-crank",
     "yield-claim-crank",
-    "nexus-manager"
+    "nexus-manager",
+    "chain-invariants"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
