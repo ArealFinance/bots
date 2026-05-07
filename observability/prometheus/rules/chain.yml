@@ -1,0 +1,120 @@
+# Phase 22 — chain-invariants alert rules.
+#
+# These alerts key off the prom-client gauges/counters exported by
+# `bots/chain-invariants/src/metrics.ts`. The exporter polls at a fixed
+# cadence (default 60s); each rule's `for` window is sized so transient
+# RPC blips do NOT page operators.
+#
+# Severity rationale:
+#   - critical:  protocol invariant violated. Pages on-call (Telegram).
+#                AuthorityDrift carries `severity_intent: page` so a
+#                Phase 24 upgrade to a dedicated page channel is a
+#                label flip, not a re-design.
+#   - warning:   degraded but recoverable (publisher slow, exporter
+#                self-failing, scrape blackhole).
+#
+# Multi-env labels (env / cluster / network) are attached by Prometheus
+# external_labels (see prometheus.template.yml) — not included here.
+
+groups:
+  - name: chain_invariants
+    interval: 30s
+    rules:
+      - alert: MerkleRootStale
+        expr: chain_invariant_merkle_root_age_seconds > 6 * 3600
+        for: 10m
+        labels:
+          severity: critical
+          component: chain-invariants
+          contract: yield-distribution
+        annotations:
+          summary: "Merkle root has not been published in over 6 hours"
+          description: |
+            Distributor {{ $labels.distributor }} merkle root age is
+            {{ $value | humanizeDuration }}. Publisher bot may be stuck,
+            KMS auth may have rotated, or RPC may be lying.
+          runbook_url: "https://docs.areal.finance/operations/runbooks/merkle-root-stale"
+
+      - alert: NavStale
+        expr: chain_invariant_nav_age_seconds > 24 * 3600
+        for: 30m
+        labels:
+          severity: warning
+          component: chain-invariants
+          contract: rwt-engine
+        annotations:
+          summary: "RWT vault NAV has not updated in over 24 hours"
+          description: |
+            RWT vault {{ $labels.rwt_engine }} last on-chain activity is
+            {{ $value | humanizeDuration }} old. NAV updater may be stuck.
+            Note: any vault TX resets this clock (Phase 22 v1 limitation —
+            tightening to NAV-only via discriminator filter is tracked
+            for Phase 23).
+          runbook_url: "https://docs.areal.finance/operations/runbooks/nav-stale"
+
+      # AuthorityDrift ships as severity: critical with severity_intent: page.
+      # Phase 24 follow-up: introduce a dedicated `page` route in
+      # Alertmanager (PagerDuty / secondary Telegram) and flip the label
+      # from critical → page. The annotation already declares the intent.
+      - alert: AuthorityDrift
+        expr: chain_invariant_authority_match == 0
+        for: 1m
+        labels:
+          severity: critical
+          severity_intent: page
+          component: chain-invariants
+        annotations:
+          summary: "On-chain authority does not match expected for {{ $labels.contract }}"
+          description: |
+            Contract {{ $labels.contract }} authority {{ $labels.authority }}
+            does not match the value baked into chain-invariants env.
+            Either: (1) a legitimate authority rotation that requires
+            updating EXPECTED_AUTHORITY_* env, or (2) unauthorized takeover.
+            Treat as the latter until proven otherwise.
+          runbook_url: "https://docs.areal.finance/operations/runbooks/authority-drift"
+
+      - alert: RwtSupplyDrift
+        expr: chain_invariant_rwt_supply_drift_abs > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: chain-invariants
+          contract: rwt-engine
+        annotations:
+          summary: "RWT vault tracked supply diverges from mint actual supply"
+          description: |
+            Vault {{ $labels.rwt_engine }} reports tracked supply that
+            diverges from on-chain mint .supply. Drift: {{ $value }}.
+            This violates a core invariant — investigate mint/burn
+            instructions immediately.
+          runbook_url: "https://docs.areal.finance/operations/runbooks/rwt-supply-drift"
+
+      # Meta-alerts: catch the case where exporter is up (job=chain-invariants
+      # is UP) but checks have been failing internally. Without this the 4
+      # invariant alerts go silently green when RPC is broken.
+      - alert: ChainInvariantsCheckFailing
+        expr: |
+          (time() - chain_invariant_check_last_success_timestamp) > 300
+        for: 5m
+        labels:
+          severity: warning
+          component: chain-invariants
+        annotations:
+          summary: "Check {{ $labels.check }} has not succeeded in 5+ minutes"
+          description: |
+            Check {{ $labels.check }} last succeeded
+            {{ $value | humanizeDuration }} ago. Exporter is up but RPC or
+            decoder is failing — invariant data is stale and other alerts
+            in this group may be silently green.
+          runbook_url: "https://docs.areal.finance/operations/runbooks/chain-invariants-check-failing"
+
+      - alert: ChainInvariantsExporterDown
+        expr: up{job=~"chain-invariants.*"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          component: chain-invariants
+        annotations:
+          summary: "Chain-invariants exporter is not scrapeable"
+          description: "Prometheus cannot scrape chain-invariants on :9201."
+          runbook_url: "https://docs.areal.finance/operations/runbooks/chain-invariants-down"

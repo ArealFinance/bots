@@ -1,0 +1,187 @@
+# Phase 22 — promtool unit tests for chain.yml.
+# Run from this directory:
+#   promtool test rules chain.test.yml
+#
+# Each block exercises one alert with a positive (fires) and a
+# negative (does NOT fire) scenario. Annotations are intentionally
+# omitted — promtool validates labels exactly; annotation grammar is
+# checked by `promtool check rules`.
+
+rule_files:
+  - ../rules/chain.yml
+
+evaluation_interval: 30s
+
+tests:
+  # ---------------- MerkleRootStale ----------------
+  - interval: 1m
+    input_series:
+      - series: 'chain_invariant_merkle_root_age_seconds{distributor="ARLDist1111"}'
+        values: '21601x20'  # 6h+1s, 20 samples = 20m
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: MerkleRootStale
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: chain-invariants
+              contract: yield-distribution
+              distributor: ARLDist1111
+
+  - interval: 1m
+    input_series:
+      - series: 'chain_invariant_merkle_root_age_seconds{distributor="ARLDist1111"}'
+        values: '300x20'  # 5min age, 20 samples
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MerkleRootStale
+        exp_alerts: []
+
+  - interval: 1m
+    input_series:
+      - series: 'chain_invariant_merkle_root_age_seconds{distributor="ARLDist1111"}'
+        # 5min normal, 5min stale (< 10m for), back to normal — must NOT fire
+        values: '0+0x5 21700x5 0+0x10'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: MerkleRootStale
+        exp_alerts: []
+
+  # ---------------- NavStale ----------------
+  - interval: 1m
+    input_series:
+      - series: 'chain_invariant_nav_age_seconds{rwt_engine="ARLVault1111"}'
+        values: '86401x40'  # 24h+1s, 40 samples = 40m
+    alert_rule_test:
+      - eval_time: 31m
+        alertname: NavStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: chain-invariants
+              contract: rwt-engine
+              rwt_engine: ARLVault1111
+
+  - interval: 1m
+    input_series:
+      - series: 'chain_invariant_nav_age_seconds{rwt_engine="ARLVault1111"}'
+        values: '3600x40'  # 1h, well below
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: NavStale
+        exp_alerts: []
+
+  # ---------------- AuthorityDrift ----------------
+  - interval: 30s
+    input_series:
+      - series: 'chain_invariant_authority_match{contract="rwt_vault",authority="ARLAuthority1111"}'
+        values: '0x10'
+      - series: 'chain_invariant_authority_match{contract="ot_governance",authority="ARLAuthority2222"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AuthorityDrift
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              severity_intent: page
+              component: chain-invariants
+              contract: rwt_vault
+              authority: ARLAuthority1111
+
+  - interval: 30s
+    input_series:
+      - series: 'chain_invariant_authority_match{contract="rwt_vault",authority="ARLAuthority1111"}'
+        values: '1x10'
+      - series: 'chain_invariant_authority_match{contract="ot_governance",authority="ARLAuthority2222"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: AuthorityDrift
+        exp_alerts: []
+
+  # -1 (unknown / fetch-failed) MUST NOT fire AuthorityDrift; the meta
+  # alert ChainInvariantsCheckFailing handles unknowns.
+  - interval: 30s
+    input_series:
+      - series: 'chain_invariant_authority_match{contract="rwt_vault",authority="ARLAuthority1111"}'
+        values: '-1x10'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: AuthorityDrift
+        exp_alerts: []
+
+  # ---------------- RwtSupplyDrift ----------------
+  - interval: 30s
+    input_series:
+      - series: 'chain_invariant_rwt_supply_drift_abs{rwt_engine="ARLVault1111"}'
+        values: '1000x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RwtSupplyDrift
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              component: chain-invariants
+              contract: rwt-engine
+              rwt_engine: ARLVault1111
+
+  - interval: 30s
+    input_series:
+      - series: 'chain_invariant_rwt_supply_drift_abs{rwt_engine="ARLVault1111"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: RwtSupplyDrift
+        exp_alerts: []
+
+  # ---------------- ChainInvariantsCheckFailing ----------------
+  # Frozen-at-0 last_success — promtool's eval_time acts as `time()`,
+  # so at 11m: time() - 0 = 660s > 300s + 5m for window → fires.
+  - interval: 30s
+    input_series:
+      - series: 'chain_invariant_check_last_success_timestamp{check="merkle_root_age"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: ChainInvariantsCheckFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: chain-invariants
+              check: merkle_root_age
+
+  - interval: 30s
+    input_series:
+      # Drifts in step with time() — 60+30x stays roughly 30s behind
+      # current time, so time() - last_success ≈ 30s, never exceeds 300s.
+      - series: 'chain_invariant_check_last_success_timestamp{check="merkle_root_age"}'
+        values: '60+30x20'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: ChainInvariantsCheckFailing
+        exp_alerts: []
+
+  # ---------------- ChainInvariantsExporterDown ----------------
+  - interval: 30s
+    input_series:
+      - series: 'up{job="chain-invariants-testnet",instance="127.0.0.1:9201"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ChainInvariantsExporterDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              component: chain-invariants
+              job: chain-invariants-testnet
+              instance: 127.0.0.1:9201
+
+  - interval: 30s
+    input_series:
+      - series: 'up{job="chain-invariants-testnet",instance="127.0.0.1:9201"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ChainInvariantsExporterDown
+        exp_alerts: []
