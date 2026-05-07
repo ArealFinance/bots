@@ -23,6 +23,7 @@
       "type": "stat",
       "title": "Bots alive",
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "expr": "sum(bot_alive{env=~\"$env\"})" }]
     },
     {
@@ -30,6 +31,7 @@
       "type": "timeseries",
       "title": "Bot heartbeat (per bot)",
       "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "expr": "bot_alive{env=~\"$env\"}", "legendFormat": "{{bot}}" }]
     },
     {
@@ -37,6 +39,7 @@
       "type": "timeseries",
       "title": "Total TX rate (per bot)",
       "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "expr": "sum by (bot) (rate(bot_tx_total{env=~\"$env\"}[5m]))",
@@ -49,6 +52,7 @@
       "type": "timeseries",
       "title": "TX error rate %",
       "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "expr": "100 * sum by (bot) (rate(bot_tx_total{env=~\"$env\",result!=\"ok\"}[5m])) / clamp_min(sum by (bot) (rate(bot_tx_total{env=~\"$env\"}[5m])), 0.001)",
@@ -61,6 +65,7 @@
       "type": "heatmap",
       "title": "Last progress (sec since)",
       "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "expr": "time() - bot_last_progress_timestamp_seconds{env=~\"$env\"}",
@@ -73,6 +78,7 @@
       "type": "bargauge",
       "title": "Wallet SOL balances",
       "gridPos": { "x": 0, "y": 20, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [{ "expr": "bot_wallet_sol{env=~\"$env\"}", "legendFormat": "{{bot}}" }]
     },
     {
@@ -80,6 +86,7 @@
       "type": "timeseries",
       "title": "RPC fallback rate (per bot)",
       "gridPos": { "x": 12, "y": 20, "w": 12, "h": 6 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
       "targets": [
         {
           "expr": "sum by (bot) (rate(bot_rpc_fallback_total{env=~\"$env\"}[5m]))",
