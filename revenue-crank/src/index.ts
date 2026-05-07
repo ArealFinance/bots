@@ -1,7 +1,10 @@
+import fs from 'node:fs';
+
 import {
   AlreadyRunningError,
   MultiRpcClient,
   SingleInstanceLock,
+  createBotMetrics,
   installSignalHandlers,
   logger,
   redactUrl,
@@ -33,6 +36,20 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   setLogLevel(cfg.logLevel);
 
+  // Phase 21: prom-client metrics surface. BOT_METRICS_PORT is supplied by
+  // scripts/lib/start-bots.ts (locked port 9102 for revenue-crank).
+  const metricsPort = parseInt(process.env.BOT_METRICS_PORT ?? '0', 10);
+  if (!metricsPort) {
+    throw new Error('revenue-crank: BOT_METRICS_PORT env not set');
+  }
+  const metrics = createBotMetrics({
+    bot: 'revenue-crank',
+    instructions: ['distribute_revenue'],
+    port: metricsPort,
+    startedAt: new Date(),
+    walletPubkey: cfg.crankKeypair.publicKey.toBase58(),
+  });
+
   logger.info('revenue-crank starting', {
     network: cfg.network,
     rpcs: cfg.rpcEndpoints.map(e => redactUrl(e.url)),
@@ -40,6 +57,7 @@ async function main(): Promise<void> {
     otProgram: cfg.otProgramId.toBase58(),
     otProjects: cfg.otProjects.length,
     intervalSecs: cfg.checkIntervalSecs,
+    metricsPort,
   });
 
   if (cfg.otProjects.length === 0) {
@@ -48,7 +66,12 @@ async function main(): Promise<void> {
     );
   }
 
-  const client = new MultiRpcClient(cfg.rpcEndpoints, { commitment: 'confirmed' });
+  const client = new MultiRpcClient(cfg.rpcEndpoints, {
+    commitment: 'confirmed',
+    onFallback: endpoint => {
+      metrics.rpcFallbackTotal.labels({ endpoint }).inc();
+    },
+  });
 
   // RPC sanity check — fail fast on misconfiguration before acquiring the lock.
   try {
@@ -85,6 +108,30 @@ async function main(): Promise<void> {
   const checkpoint = new CheckpointStore(cfg.dbPath);
   const dedupe = new SingleFlightLock();
 
+  // Phase 21: 60s heartbeat task — refresh wallet SOL gauge + checkpoint
+  // file size. Failures are silenced; the rpc_fallback counter already
+  // captures repeated failures and BotWalletLow / BotNoProgress alerts
+  // catch downstream consequences.
+  const heartbeatInterval = setInterval(() => {
+    void (async (): Promise<void> => {
+      try {
+        const lamports = await client.withFallback(c =>
+          c.getBalance(cfg.crankKeypair.publicKey, 'confirmed'),
+        );
+        metrics.walletSol.set(lamports / 1e9);
+      } catch {
+        /* surfaces via rpc_fallback counter */
+      }
+      try {
+        const stat = fs.statSync(cfg.dbPath);
+        metrics.sqliteSize.set(stat.size);
+      } catch {
+        /* db not yet open — ignore */
+      }
+    })();
+  }, 60_000);
+  heartbeatInterval.unref();
+
   const stopController = new AbortController();
 
   // R31: catch up on signatures we may have missed across restarts / WS gaps.
@@ -94,11 +141,12 @@ async function main(): Promise<void> {
     checkpoint,
     lock: dedupe,
     signal: stopController.signal,
+    metrics,
   }).catch(err => {
     logger.error('startup reconcile failed', err);
   });
 
-  const wsSub = subscribeRevenueEvents({ conn, cfg, checkpoint, lock: dedupe, client });
+  const wsSub = subscribeRevenueEvents({ conn, cfg, checkpoint, lock: dedupe, client, metrics });
 
   let alreadyShuttingDown = false;
   const shutdown = async (signal: string, exitCode = 0): Promise<void> => {
@@ -106,6 +154,7 @@ async function main(): Promise<void> {
     alreadyShuttingDown = true;
     logger.info(`received ${signal}, shutting down`);
     stopController.abort();
+    clearInterval(heartbeatInterval);
     try {
       await wsSub.unsubscribe();
     } catch (e) {
@@ -121,6 +170,11 @@ async function main(): Promise<void> {
     } catch (e) {
       logger.error('lock release failed', e);
     }
+    try {
+      await metrics.shutdown();
+    } catch (e) {
+      logger.error('metrics shutdown failed', e);
+    }
     logger.info('shutdown complete');
     process.exit(exitCode);
   };
@@ -128,7 +182,7 @@ async function main(): Promise<void> {
 
   // Run-forever loop. `runLoop` returns only when the abort signal fires.
   try {
-    await runLoop({ conn, cfg, checkpoint, lock: dedupe, signal: stopController.signal, client });
+    await runLoop({ conn, cfg, checkpoint, lock: dedupe, signal: stopController.signal, client, metrics });
   } catch (err) {
     logger.error('runLoop crashed', err);
     void shutdown('crash', 1);

@@ -1,8 +1,10 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 
 import {
+  type BotMetrics,
   MultiRpcClient,
   assertCrankBalance,
+  classifyError,
   logger,
   reconcileEvents,
   resolveMinLamportsFromEnv,
@@ -118,8 +120,12 @@ export async function processOt(args: {
    * tests don't need to mock the pool.
    */
   client?: MultiRpcClient;
+  /** Phase 21: optional metrics surface — when provided, the TX submit is
+   *  wrapped with observeTx so success/failure populates bot_tx_total +
+   *  bot_tx_duration_seconds with the classified `result` label. */
+  metrics?: BotMetrics;
 }): Promise<DistributionDecision> {
-  const { conn, cfg, checkpoint, otMint, client } = args;
+  const { conn, cfg, checkpoint, otMint, client, metrics } = args;
   const nowSecs = args.nowSecs ?? Math.floor(Date.now() / 1000);
 
   const { revenueAccount, revenueConfig } = deriveRevenuePdas(otMint, cfg.otProgramId);
@@ -226,11 +232,18 @@ export async function processOt(args: {
   try {
     // R29 sweep: wrap the submit in the multi-RPC client when available, so a
     // single endpoint failure rotates to the next instead of dropping the TX.
-    const sig = client
-      ? await client.withFallback((c) =>
-          sendDistributeRevenueTx(c, cfg.crankKeypair, ix),
-        )
-      : await sendDistributeRevenueTx(conn, cfg.crankKeypair, ix);
+    // Phase 21: when metrics is wired, observeTx records the result label +
+    // duration histogram + ok→markProgress; classifyError folds the throw
+    // into the locked 5-value union.
+    const submit = (): Promise<string> =>
+      client
+        ? client.withFallback(c => sendDistributeRevenueTx(c, cfg.crankKeypair, ix))
+        : sendDistributeRevenueTx(conn, cfg.crankKeypair, ix);
+
+    const sig = metrics
+      ? await metrics.observeTx('distribute_revenue', submit, classifyError)
+      : await submit();
+
     logger.info('distribute_revenue OK', {
       ot: otMint.toBase58(),
       sig,
@@ -258,11 +271,12 @@ export async function runLoop(args: {
   lock: SingleFlightLock;
   signal: AbortSignal;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): Promise<void> {
-  const { conn, cfg, checkpoint, lock, signal, client } = args;
+  const { conn, cfg, checkpoint, lock, signal, client, metrics } = args;
 
   while (!signal.aborted) {
-    await runOnce({ conn, cfg, checkpoint, lock, client });
+    await runOnce({ conn, cfg, checkpoint, lock, client, metrics });
     if (signal.aborted) break;
     await sleep(cfg.checkIntervalSecs * 1000, signal);
   }
@@ -279,8 +293,9 @@ export async function runOnce(args: {
   checkpoint: CheckpointStore;
   lock: SingleFlightLock;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): Promise<DistributionDecision[]> {
-  const { conn, cfg, checkpoint, lock, client } = args;
+  const { conn, cfg, checkpoint, lock, client, metrics } = args;
   const out: DistributionDecision[] = [];
   for (const ot of cfg.otProjects) {
     const key = ot.toBase58();
@@ -289,7 +304,7 @@ export async function runOnce(args: {
       continue;
     }
     try {
-      out.push(await processOt({ conn, cfg, checkpoint, otMint: ot, client }));
+      out.push(await processOt({ conn, cfg, checkpoint, otMint: ot, client, metrics }));
     } finally {
       lock.release(key);
     }
@@ -313,8 +328,9 @@ export function subscribeRevenueEvents(args: {
   checkpoint: CheckpointStore;
   lock: SingleFlightLock;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): { unsubscribe: () => Promise<void> } {
-  const { conn, cfg, checkpoint, lock, client } = args;
+  const { conn, cfg, checkpoint, lock, client, metrics } = args;
   const subId = conn.onLogs(
     cfg.otProgramId,
     async (logs, ctx) => {
@@ -329,7 +345,7 @@ export function subscribeRevenueEvents(args: {
         const key = ot.toBase58();
         if (!lock.acquire(key)) continue;
         try {
-          await processOt({ conn, cfg, checkpoint, otMint: ot, client });
+          await processOt({ conn, cfg, checkpoint, otMint: ot, client, metrics });
         } catch (e) {
           logger.error('WS-triggered processOt failed', e, { ot: key });
         } finally {
@@ -361,8 +377,9 @@ export async function reconcileSinceLastSeen(args: {
   checkpoint: CheckpointStore;
   lock: SingleFlightLock;
   signal?: AbortSignal;
+  metrics?: BotMetrics;
 }): Promise<number> {
-  const { client, cfg, checkpoint, lock, signal } = args;
+  const { client, cfg, checkpoint, lock, signal, metrics } = args;
   const programKey = cfg.otProgramId.toBase58();
   const fromSlot = checkpoint.getLastSeenSlot(programKey);
   if (fromSlot === null) {
@@ -381,7 +398,7 @@ export async function reconcileSinceLastSeen(args: {
           const key = ot.toBase58();
           if (!lock.acquire(key)) continue;
           try {
-            await processOt({ conn, cfg, checkpoint, otMint: ot, client });
+            await processOt({ conn, cfg, checkpoint, otMint: ot, client, metrics });
           } catch (e) {
             logger.error('reconcile-triggered processOt failed', e, { ot: key });
           } finally {
