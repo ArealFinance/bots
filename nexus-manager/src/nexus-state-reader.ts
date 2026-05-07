@@ -1,13 +1,16 @@
 /**
  * On-chain reads for the nexus-manager bot.
  *
- * The exported parsers are thin adapters over `@areal/sdk/native-dex`
+ * The exported parsers are thin wrappers over `@areal/sdk/native-dex`
  * codegen parsers (Phase 4.2 B.6 — SDK ships first-class parsers since
- * Phase 3.5). The bot's wrappers add two things on top of the SDK output:
- *   1. Convert IDL `[u8; 32]` byte arrays to `PublicKey` instances so
- *      downstream consumers keep `.equals` / `.toBuffer` ergonomics.
- *   2. Project the bot's narrow `PoolStateInfo` subset (the decision
- *      engine never reads bin/treasury fields).
+ * Phase 3.5). The bot's wrappers project the bot's narrow `PoolStateInfo`
+ * subset (the decision engine never reads bin/treasury fields).
+ *
+ * As of `@arlex/client@0.3.1` (Phase 3.5 C.3), the SDK runtime wraps
+ * pubkey-overridden `[u8; 32]` fields as `PublicKey` instances directly,
+ * so the bot no longer needs a `toPublicKey` adapter — fields like
+ * `manager`, `pool`, `owner`, `tokenAMint`, `vaultA` come back ready
+ * to use with `.equals` / `.toBuffer` / `.toBase58`.
  *
  * Critical-state reads (`readLiquidityNexus`) use {@link consensusRead} from
  * `@areal/bots-shared` so that a single misbehaving RPC cannot cause the bot
@@ -72,27 +75,14 @@ export function deriveLpPositionPda(
 }
 
 /**
- * Convert a 32-byte array (Bytes32, as returned by the SDK codegen runtime
- * for IDL `[u8; 32]` fields) into a `PublicKey` instance. The SDK declares
- * these fields as `PublicKey` in TypeScript but the runtime returns raw
- * `number[]` because the IDL spells them as byte arrays — this adapter
- * bridges the gap so downstream code keeps the `PublicKey` API
- * (`.equals`, `.toBuffer`, `.toBase58`).
- */
-function toPublicKey(bytes: number[] | Uint8Array | PublicKey): PublicKey {
-  if (bytes instanceof PublicKey) return bytes;
-  return new PublicKey(Uint8Array.from(bytes as Iterable<number>));
-}
-
-/**
  * Parse `LiquidityNexus` raw account data (8-byte discriminator + 50-byte
  * body). Validates the IDL discriminator and throws on mismatch or length
  * underflow — caller must catch.
  *
  * Phase 4.2 B.6 — delegates to `@areal/sdk/native-dex` codegen parser
- * (Phase 3.5 unblocked SDK first-class parsers). The SDK returns `manager`
- * as a 32-byte array (IDL `[u8; 32]`); we adapt it to `PublicKey` so the
- * existing comparator + downstream consumers keep their API.
+ * (Phase 3.5 unblocked SDK first-class parsers). As of `@arlex/client@0.3.1`
+ * the SDK returns `manager` as a `PublicKey` directly (runtime pubkey
+ * wrapping); the bot wrapper just narrows to the bot's local type.
  *
  * Layout (per `contracts/native-dex/src/state.rs::LiquidityNexus`):
  *   manager              [u8;32]  → 0..32
@@ -104,7 +94,7 @@ function toPublicKey(bytes: number[] | Uint8Array | PublicKey): PublicKey {
 export function parseLiquidityNexus(data: Buffer): LiquidityNexusState {
   const raw = sdkParseLiquidityNexus(data);
   return {
-    manager: toPublicKey(raw.manager),
+    manager: raw.manager,
     totalDepositedUsdc: raw.totalDepositedUsdc,
     totalDepositedRwt: raw.totalDepositedRwt,
     isActive: raw.isActive,
@@ -115,8 +105,9 @@ export function parseLiquidityNexus(data: Buffer): LiquidityNexusState {
 /**
  * Parse `LpPosition` raw account data (8-byte discriminator + 121-byte body).
  *
- * Phase 4.2 B.6 — delegates to `@areal/sdk/native-dex`. SDK returns `pool`
- * and `owner` as 32-byte arrays; adapter wraps them as `PublicKey`.
+ * Phase 4.2 B.6 — delegates to `@areal/sdk/native-dex`. As of
+ * `@arlex/client@0.3.1` the SDK returns `pool` and `owner` as `PublicKey`
+ * directly — no adapter needed.
  *
  * Layout (per `contracts/native-dex/src/state.rs::LpPosition`):
  *   pool                       [u8;32] → 0..32
@@ -130,8 +121,8 @@ export function parseLiquidityNexus(data: Buffer): LiquidityNexusState {
 export function parseLpPosition(data: Buffer): LpPositionState {
   const raw = sdkParseLpPosition(data);
   return {
-    pool: toPublicKey(raw.pool),
-    owner: toPublicKey(raw.owner),
+    pool: raw.pool,
+    owner: raw.owner,
     shares: raw.shares,
     lastUpdateTs: raw.lastUpdateTs,
     bump: raw.bump,
@@ -147,6 +138,9 @@ export function parseLpPosition(data: Buffer): LpPositionState {
  * subset (mints, vaults, reserves, totalLpShares, isActive, fee
  * accumulators). SDK parses all 17 fields incl. D28 LP-fee accumulators;
  * we keep the bot's narrow surface to limit the consumer-facing change.
+ *
+ * As of `@arlex/client@0.3.1` the SDK returns mint/vault `[u8;32]` fields
+ * as `PublicKey` directly — no adapter needed.
  *
  * Layout offsets (Layer 9 D28 — body 244 bytes):
  *   pool_type            u8       → 0
@@ -172,10 +166,10 @@ export function parsePoolStateInfo(data: Buffer, pool: PublicKey): PoolStateInfo
   const raw = sdkParsePoolState(data);
   return {
     pool,
-    tokenAMint: toPublicKey(raw.tokenAMint),
-    tokenBMint: toPublicKey(raw.tokenBMint),
-    vaultA: toPublicKey(raw.vaultA),
-    vaultB: toPublicKey(raw.vaultB),
+    tokenAMint: raw.tokenAMint,
+    tokenBMint: raw.tokenBMint,
+    vaultA: raw.vaultA,
+    vaultB: raw.vaultB,
     reserveA: raw.reserveA,
     reserveB: raw.reserveB,
     totalLpShares: raw.totalLpShares,
