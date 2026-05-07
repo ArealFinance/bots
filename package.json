@@ -33,6 +33,6 @@
     "claim:test": "npm -w yield-claim-crank test",
     "nexus-manager:start": "npm -w nexus-manager run start",
     "nexus-manager:test": "npm -w nexus-manager test",
-    "e2e": "tsx --test .e2e/parity-tests.test.ts .e2e/parity-tx-builders.test.ts .e2e/layer-08-e2e.test.ts .e2e/layer-09-e2e.test.ts .e2e/layer-10-scenario-1-happy-path.test.ts .e2e/layer-10-scenario-2-governance.test.ts .e2e/layer-10-scenario-3-dex.test.ts .e2e/layer-10-scenario-4-concentrated.test.ts .e2e/layer-10-scenario-5-nexus.test.ts .e2e/layer-10-scenario-6-emergency.test.ts .e2e/discriminator-audit.test.ts"
+    "e2e": "tsx --test .e2e/parity-tests.test.ts .e2e/parity-tx-builders.test.ts .e2e/sdk-pda-parity.test.ts .e2e/layer-08-e2e.test.ts .e2e/layer-09-e2e.test.ts .e2e/layer-10-scenario-1-happy-path.test.ts .e2e/layer-10-scenario-2-governance.test.ts .e2e/layer-10-scenario-3-dex.test.ts .e2e/layer-10-scenario-4-concentrated.test.ts .e2e/layer-10-scenario-5-nexus.test.ts .e2e/layer-10-scenario-6-emergency.test.ts .e2e/discriminator-audit.test.ts"
   }
 }
