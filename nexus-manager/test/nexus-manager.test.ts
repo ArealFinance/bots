@@ -9,6 +9,7 @@ import {
 import {
   parseLiquidityNexus,
   parseLpPosition,
+  parsePoolStateInfo,
 } from '../src/nexus-state-reader.js';
 import {
   buildNexusSwapIx,
@@ -295,6 +296,65 @@ describe('parseLiquidityNexus (50-byte body)', () => {
     expect(state.totalDepositedRwt).toBe(0n);
     expect(state.isActive).toBe(false);
     expect(state.bump).toBe(0);
+  });
+});
+
+describe('parsePoolStateInfo (244-byte body, Layer 9 D28)', () => {
+  // Locks the field-subset extraction the bot relies on (bot does NOT decode
+  // every PoolState field — keeping the surface narrow). Migration to SDK
+  // codegen must preserve these exact fields + types.
+  it('decodes the bot-required subset: mints, vaults, reserves, shares, isActive, fee accumulators', () => {
+    const buf = Buffer.alloc(8 + 244);
+    const body = buf.subarray(8);
+    body.writeUInt8(0, 0); // pool_type = Constant
+    Buffer.alloc(32, 2).copy(body, 1); // token_a_mint = USDC_MINT
+    Buffer.alloc(32, 3).copy(body, 33); // token_b_mint = RWT_MINT
+    Buffer.alloc(32, 5).copy(body, 65); // vault_a = VAULT_A
+    Buffer.alloc(32, 6).copy(body, 97); // vault_b = VAULT_B
+    body.writeBigUInt64LE(1_000_000_000n, 129); // reserve_a
+    body.writeBigUInt64LE(2_000_000_000n, 137); // reserve_b
+    // total_lp_shares u128 = 7
+    body.writeBigUInt64LE(7n, 145);
+    body.writeBigUInt64LE(0n, 153);
+    body.writeUInt16LE(30, 161); // fee_bps
+    body.writeUInt8(1, 163); // is_active = true
+    body.writeBigUInt64LE(0n, 164); // total_fees_accumulated
+    body.writeUInt16LE(0, 172); // bin_step_bps
+    body.writeInt32LE(0, 174); // active_bin_id
+    Buffer.alloc(32, 0).copy(body, 178); // ot_treasury_fee_destination
+    body.writeUInt8(0, 210); // has_ot_treasury
+    body.writeUInt8(254, 211); // bump
+    // cumulative_fees_per_share_a u128 = 11
+    body.writeBigUInt64LE(11n, 212);
+    body.writeBigUInt64LE(0n, 220);
+    // cumulative_fees_per_share_b u128 = (2 << 64) + 13 — exercises hi-half
+    body.writeBigUInt64LE(13n, 228);
+    body.writeBigUInt64LE(2n, 236);
+
+    const info = parsePoolStateInfo(buf, POOL);
+    expect(info.pool.equals(POOL)).toBe(true);
+    expect(info.tokenAMint.toBuffer().every(b => b === 2)).toBe(true);
+    expect(info.tokenBMint.toBuffer().every(b => b === 3)).toBe(true);
+    expect(info.vaultA.toBuffer().every(b => b === 5)).toBe(true);
+    expect(info.vaultB.toBuffer().every(b => b === 6)).toBe(true);
+    expect(info.reserveA).toBe(1_000_000_000n);
+    expect(info.reserveB).toBe(2_000_000_000n);
+    expect(info.totalLpShares).toBe(7n);
+    expect(info.isActive).toBe(true);
+    expect(info.cumulativeFeesPerShareA).toBe(11n);
+    expect(info.cumulativeFesPerShareB).toBe((2n << 64n) + 13n);
+  });
+
+  it('decodes is_active=false', () => {
+    const buf = Buffer.alloc(8 + 244);
+    const body = buf.subarray(8);
+    Buffer.alloc(32, 2).copy(body, 1);
+    Buffer.alloc(32, 3).copy(body, 33);
+    Buffer.alloc(32, 5).copy(body, 65);
+    Buffer.alloc(32, 6).copy(body, 97);
+    body.writeUInt8(0, 163); // is_active = false
+    const info = parsePoolStateInfo(buf, POOL);
+    expect(info.isActive).toBe(false);
   });
 });
 
