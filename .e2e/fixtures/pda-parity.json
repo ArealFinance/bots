@@ -1,0 +1,386 @@
+{
+  "_comment": "Phase 4.1 B.5 — SDK PDA byte-identity fixtures. Each entry: pinned (seeds, programId) input → expected (pda base58, bump). Generated once via PublicKey.findProgramAddressSync as canonical reference. Regenerate ONLY if program IDs (sdk/src/network/program-ids.ts) or seed prefixes (contracts/*/src/constants.rs) change.",
+  "findRwtVaultPda": [
+    {
+      "args": {
+        "programId": "RWT9hgbjHQDj98xP7FYsT5QYp5X32XyK6QfMRmFtARL"
+      },
+      "expected": {
+        "pda": "8aLxoUfMVk1LntPtRjpFA3ooxWZgLbjs8eTos8SfunYY",
+        "bump": 255
+      }
+    }
+  ],
+  "findRwtDistConfigPda": [
+    {
+      "args": {
+        "programId": "RWT9hgbjHQDj98xP7FYsT5QYp5X32XyK6QfMRmFtARL"
+      },
+      "expected": {
+        "pda": "88yMh7KXsDKJjTLAWLxh6rHY3SNNWLEBKRtSzqKibRAQ",
+        "bump": 255
+      }
+    }
+  ],
+  "findDexConfigPda": [
+    {
+      "args": {
+        "programId": "DEX8LmvJpjefPS1cGS9zWB9ybxN24vNjTTrusBeqyARL"
+      },
+      "expected": {
+        "pda": "CXjqgExZQmxkg9wtW5HSagB3HNKyTedmZNw4hrPc9oTy",
+        "bump": 255
+      }
+    }
+  ],
+  "findPoolCreatorsPda": [
+    {
+      "args": {
+        "programId": "DEX8LmvJpjefPS1cGS9zWB9ybxN24vNjTTrusBeqyARL"
+      },
+      "expected": {
+        "pda": "8oSJwQz7dubGeiw5h5x3jyWbEed56kvpvnpM5ZgBpBSF",
+        "bump": 254
+      }
+    }
+  ],
+  "findPoolStatePda": [
+    {
+      "args": {
+        "tokenAMint": "25hjHpTATmkdET17ynDhf1MCuYNDn1z7wXfVw5iaxLAK",
+        "tokenBMint": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+        "programId": "DEX8LmvJpjefPS1cGS9zWB9ybxN24vNjTTrusBeqyARL"
+      },
+      "expected": {
+        "pda": "Gah7sxVp3aFvpmNjJSX4oWJicAAN6TDu2HWDrr3Dxnpg",
+        "bump": 253
+      }
+    },
+    {
+      "args": {
+        "tokenAMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "tokenBMint": "29d2S7vB453rNYFdR5Ycwt7y9haRT5fwVwL9zTmBhfV2",
+        "programId": "DEX8LmvJpjefPS1cGS9zWB9ybxN24vNjTTrusBeqyARL"
+      },
+      "expected": {
+        "pda": "8Q9mLohJXsqcsn6xUL3guCceKxCTUV4Rs3QFRyDrxDCK",
+        "bump": 255
+      }
+    }
+  ],
+  "findLpPositionPda": [
+    {
+      "args": {
+        "pool": "3AQTaduKvYWFTu1ExZSQK1hQp5jSZ2yEt4KzsASAufKd",
+        "owner": "4F7BsTMVPKFshM1MwLf6y23cid6fL3xMpazVoF9krzUw",
+        "programId": "DEX8LmvJpjefPS1cGS9zWB9ybxN24vNjTTrusBeqyARL"
+      },
+      "expected": {
+        "pda": "8K16Bs3JoPYuN5tpkDM9kiHbvyAnMVTftWeHKhJYYu3",
+        "bump": 255
+      }
+    },
+    {
+      "args": {
+        "pool": "3AQTaduKvYWFTu1ExZSQK1hQp5jSZ2yEt4KzsASAufKd",
+        "owner": "4K2V1kpVycZ6qSFsNdz2FtpNxnJs17eBNzf9rdCMcKoe",
+        "programId": "DEX8LmvJpjefPS1cGS9zWB9ybxN24vNjTTrusBeqyARL"
+      },
+      "expected": {
+        "pda": "BwXEq3ZALbVP78Bsyxtrn9untRnYL2Vu9kH4eN2STeRy",
+        "bump": 255
+      }
+    }
+  ],
+  "findBinArrayPda": [
+    {
+      "args": {
+        "poolState": "3AQTaduKvYWFTu1ExZSQK1hQp5jSZ2yEt4KzsASAufKd",
+        "programId": "DEX8LmvJpjefPS1cGS9zWB9ybxN24vNjTTrusBeqyARL"
+      },
+      "expected": {
+        "pda": "3fCW1QG2nZVURfdXh1LuJBD8ppiWiYuutpJ1VUiQZ5VL",
+        "bump": 254
+      }
+    }
+  ],
+  "findLiquidityNexusPda": [
+    {
+      "args": {
+        "programId": "DEX8LmvJpjefPS1cGS9zWB9ybxN24vNjTTrusBeqyARL"
+      },
+      "expected": {
+        "pda": "GzZJ6wKnrniLcfFFxFEkbu8WmUC6epN2y65EUfSckZBq",
+        "bump": 252
+      }
+    }
+  ],
+  "findOtConfigPda": [
+    {
+      "args": {
+        "otMint": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+        "programId": "oWnqbNwmEdjNS5KVbxz8xeuGNjKMd1aiNF89d7qdARL"
+      },
+      "expected": {
+        "pda": "BmouzTn5CnAgBkptm7C1avhmXzZLp8zCdRykXr8z3u55",
+        "bump": 254
+      }
+    },
+    {
+      "args": {
+        "otMint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
+        "programId": "oWnqbNwmEdjNS5KVbxz8xeuGNjKMd1aiNF89d7qdARL"
+      },
+      "expected": {
+        "pda": "HxxJUZB95HKmgfcS7VYvhddnu3XcmBpZpTwawTmsg2im",
+        "bump": 255
+      }
+    }
+  ],
+  "findRevenueAccountPda": [
+    {
+      "args": {
+        "otMint": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+        "programId": "oWnqbNwmEdjNS5KVbxz8xeuGNjKMd1aiNF89d7qdARL"
+      },
+      "expected": {
+        "pda": "2NazN4AojgcWqJyLNxoYLpNAaFL8DQpM26o2cFmHGn5r",
+        "bump": 253
+      }
+    },
+    {
+      "args": {
+        "otMint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
+        "programId": "oWnqbNwmEdjNS5KVbxz8xeuGNjKMd1aiNF89d7qdARL"
+      },
+      "expected": {
+        "pda": "FVh4V1ZtEExzwLfmjpVMyubSnXXbhcGJEhRxqjiNncng",
+        "bump": 254
+      }
+    }
+  ],
+  "findRevenueConfigPda": [
+    {
+      "args": {
+        "otMint": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+        "programId": "oWnqbNwmEdjNS5KVbxz8xeuGNjKMd1aiNF89d7qdARL"
+      },
+      "expected": {
+        "pda": "J4nNsSPDomd4jN4AWicSziVfZiNwe2AXV8mGQ3SaYAKH",
+        "bump": 255
+      }
+    },
+    {
+      "args": {
+        "otMint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
+        "programId": "oWnqbNwmEdjNS5KVbxz8xeuGNjKMd1aiNF89d7qdARL"
+      },
+      "expected": {
+        "pda": "FXKWPqSxYg5pc3WvqeAEhE4aYwiC8iZjaSb3cxUeCqAk",
+        "bump": 252
+      }
+    }
+  ],
+  "findOtGovernancePda": [
+    {
+      "args": {
+        "otMint": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+        "programId": "oWnqbNwmEdjNS5KVbxz8xeuGNjKMd1aiNF89d7qdARL"
+      },
+      "expected": {
+        "pda": "7o5yeKhZDrXffjvmTW7zdKW9kFyXeG7BUqHAHVAKhtn1",
+        "bump": 255
+      }
+    },
+    {
+      "args": {
+        "otMint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
+        "programId": "oWnqbNwmEdjNS5KVbxz8xeuGNjKMd1aiNF89d7qdARL"
+      },
+      "expected": {
+        "pda": "2PfJGXtkpYL87J7khmuW3P8JvAu97LfAyxGfD8gEkV82",
+        "bump": 254
+      }
+    }
+  ],
+  "findOtTreasuryPda": [
+    {
+      "args": {
+        "otMint": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+        "programId": "oWnqbNwmEdjNS5KVbxz8xeuGNjKMd1aiNF89d7qdARL"
+      },
+      "expected": {
+        "pda": "GLhQJHkJ6jGR1ttdH7Be6rGFk2fuQg7yZpnW5JFcfKsj",
+        "bump": 255
+      }
+    },
+    {
+      "args": {
+        "otMint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
+        "programId": "oWnqbNwmEdjNS5KVbxz8xeuGNjKMd1aiNF89d7qdARL"
+      },
+      "expected": {
+        "pda": "DBLm5Lc2xesf1WEDvML8c1AJJmSvN9E4guZLEN8pRdWy",
+        "bump": 255
+      }
+    }
+  ],
+  "findYdConfigPda": [
+    {
+      "args": {
+        "programId": "YLD9EBikcTmVCnVzdx6vuNajrDkp8tyCAgZrqTwmMXF"
+      },
+      "expected": {
+        "pda": "HwuG6q5vFybPMmyYqKiJV6BCupKVCkpXo9gBWeKYrH3g",
+        "bump": 255
+      }
+    }
+  ],
+  "findMerkleDistributorPda": [
+    {
+      "args": {
+        "otMint": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+        "programId": "YLD9EBikcTmVCnVzdx6vuNajrDkp8tyCAgZrqTwmMXF"
+      },
+      "expected": {
+        "pda": "FCgwD3iJedLGJw561HgGZmZgdRdi5DDouWQWB1XonHaG",
+        "bump": 255
+      }
+    },
+    {
+      "args": {
+        "otMint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
+        "programId": "YLD9EBikcTmVCnVzdx6vuNajrDkp8tyCAgZrqTwmMXF"
+      },
+      "expected": {
+        "pda": "Dt16BnrYG6tXrgoQsGkoN2xFrHhgoNGdWofHskKHzHcH",
+        "bump": 254
+      }
+    }
+  ],
+  "findYdAccumulatorPda": [
+    {
+      "args": {
+        "otMint": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+        "programId": "YLD9EBikcTmVCnVzdx6vuNajrDkp8tyCAgZrqTwmMXF"
+      },
+      "expected": {
+        "pda": "F6XUfDGEzPpwsyffv3QDpZj37gNDcv2KxAsYvwZziEGz",
+        "bump": 255
+      }
+    },
+    {
+      "args": {
+        "otMint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
+        "programId": "YLD9EBikcTmVCnVzdx6vuNajrDkp8tyCAgZrqTwmMXF"
+      },
+      "expected": {
+        "pda": "FETAFxknRnLuoHnZWcW4znZvtJ7EdX5uhejjFn8rknZr",
+        "bump": 254
+      }
+    }
+  ],
+  "findClaimStatusPda": [
+    {
+      "args": {
+        "distributor": "5KovAGoer61Vvo1Uv7sod2PpdATt74wUm7ezjKsLpKeF",
+        "claimant": "5PjDJaGfSPJj4tFzMRCiuuAasKg5n8dJKXKenhuwZexx",
+        "programId": "YLD9EBikcTmVCnVzdx6vuNajrDkp8tyCAgZrqTwmMXF"
+      },
+      "expected": {
+        "pda": "5rVnTnrSWR8MsCXDu6KCezRjJxNpwt6YjJfsDE56TXdR",
+        "bump": 255
+      }
+    },
+    {
+      "args": {
+        "distributor": "5KovAGoer61Vvo1Uv7sod2PpdATt74wUm7ezjKsLpKeF",
+        "claimant": "4F7BsTMVPKFshM1MwLf6y23cid6fL3xMpazVoF9krzUw",
+        "programId": "YLD9EBikcTmVCnVzdx6vuNajrDkp8tyCAgZrqTwmMXF"
+      },
+      "expected": {
+        "pda": "BBK6FTQ8obtbW1fsp3FDxM5pVRR6ExmXUvNCW6H1xN9f",
+        "bump": 250
+      }
+    }
+  ],
+  "findLiquidityHoldingPda": [
+    {
+      "args": {
+        "programId": "YLD9EBikcTmVCnVzdx6vuNajrDkp8tyCAgZrqTwmMXF"
+      },
+      "expected": {
+        "pda": "6e5Qwr8DJiGPBZx9aXsaZ1J6LNGT41Y43DwmkwABr6EZ",
+        "bump": 254
+      }
+    }
+  ],
+  "findFutarchyConfigPda": [
+    {
+      "args": {
+        "otMint": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+        "programId": "FUTsbsdyJmEWa5LSYHWXMr9hQFyVsrJ1agGvRQGR1ARL"
+      },
+      "expected": {
+        "pda": "C1Sh3mzHuhTi1Sjqi3PDU5aVY9bAXCj2RdF62L2JzgKS",
+        "bump": 255
+      }
+    },
+    {
+      "args": {
+        "otMint": "LbUiWL3xVV8hTFYBVdbTNrpDo41NKS6o3LHHuDzjfcY",
+        "programId": "FUTsbsdyJmEWa5LSYHWXMr9hQFyVsrJ1agGvRQGR1ARL"
+      },
+      "expected": {
+        "pda": "BhiHfNW1PQspHkwhuC1WoEqyzCKez5jdtaz9tn8EMsa7",
+        "bump": 255
+      }
+    }
+  ],
+  "findProposalPda": [
+    {
+      "args": {
+        "configPda": "6QWeT6FpJrm8AF1btu6WH2k2Xhq6t5vbheKVfQavmeoZ",
+        "proposalId": "0",
+        "programId": "FUTsbsdyJmEWa5LSYHWXMr9hQFyVsrJ1agGvRQGR1ARL"
+      },
+      "expected": {
+        "pda": "9i9YB66js6SvCaxQ9pdKG2YZi7h4NpFAKzGaw3Rn5P9s",
+        "bump": 254
+      }
+    },
+    {
+      "args": {
+        "configPda": "6QWeT6FpJrm8AF1btu6WH2k2Xhq6t5vbheKVfQavmeoZ",
+        "proposalId": "42",
+        "programId": "FUTsbsdyJmEWa5LSYHWXMr9hQFyVsrJ1agGvRQGR1ARL"
+      },
+      "expected": {
+        "pda": "678nm4ipE8a9u7VX7ZM8wKNF7WHsLxUe2Vonmx9iNMKT",
+        "bump": 255
+      }
+    }
+  ],
+  "findAssociatedTokenAddressPda": [
+    {
+      "args": {
+        "owner": "4F7BsTMVPKFshM1MwLf6y23cid6fL3xMpazVoF9krzUw",
+        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+      },
+      "expected": {
+        "pda": "4VBZhcSPANqTyTurydixLzuUEdrKvgTWaRr4f3vpXxoQ",
+        "bump": 254
+      }
+    },
+    {
+      "args": {
+        "owner": "4K2V1kpVycZ6qSFsNdz2FtpNxnJs17eBNzf9rdCMcKoe",
+        "mint": "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+      },
+      "expected": {
+        "pda": "Fe3dnGdnRvP87KXXJN4vrLZaySdotgDMUrcDbAUDjEEF",
+        "bump": 254
+      }
+    }
+  ]
+}
