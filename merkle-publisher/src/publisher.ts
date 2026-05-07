@@ -2,10 +2,10 @@ import {
   Connection,
   PublicKey,
   Transaction,
-  TransactionInstruction,
 } from '@solana/web3.js';
 import { createHash } from 'node:crypto';
 import { findYdConfigPda } from '@areal/sdk/pda';
+import { buildPublishRootIx } from '@areal/sdk/tx';
 import type { BotConfig } from './config.js';
 import type { KmsSigner } from './kms-signer.js';
 import type { ProofStore } from './proof-store.js';
@@ -279,10 +279,10 @@ export class Publisher {
   ): Promise<string> {
     const [configPda] = findYdConfigPda(this.cfg.ydProgramId);
 
-    const ix = buildPublishRootInstruction({
-      programId: this.cfg.ydProgramId,
+    const ix = buildPublishRootIx({
+      ydProgramId: this.cfg.ydProgramId,
       publishAuthority: this.signer.publicKey,
-      configPda,
+      config: configPda,
       distributor,
       otMint,
       merkleRoot: root,
@@ -331,55 +331,6 @@ export class Publisher {
       `publish_root exhausted retries: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`,
     );
   }
-}
-
-/**
- * Builds the publish_root instruction byte-for-byte per Arlex/Anchor conventions.
- *
- * Instruction data layout:
- *   [discriminator (8) | merkle_root (32) | max_total_claim (u64 LE)]
- *
- * Discriminator = sha256("global:publish_root")[..8] — matches the arlex-derive
- * program macro, which mirrors Anchor's naming.
- *
- * Accounts (order — must match contract's PublishRoot accounts struct):
- *   0: publish_authority (signer, readonly)
- *   1: config PDA (readonly)
- *   2: ot_mint (readonly)
- *   3: distributor PDA (writable)
- */
-export interface BuildPublishRootParams {
-  programId: PublicKey;
-  publishAuthority: PublicKey;
-  configPda: PublicKey;
-  distributor: PublicKey;
-  otMint: PublicKey;
-  merkleRoot: Uint8Array;
-  maxTotalClaim: bigint;
-}
-
-export function buildPublishRootInstruction(p: BuildPublishRootParams): TransactionInstruction {
-  if (p.merkleRoot.length !== 32) {
-    throw new Error(`merkleRoot must be 32 bytes, got ${p.merkleRoot.length}`);
-  }
-
-  const disc = createHash('sha256').update('global:publish_root').digest().subarray(0, 8);
-
-  const data = Buffer.alloc(8 + 32 + 8);
-  disc.copy(data, 0);
-  Buffer.from(p.merkleRoot).copy(data, 8);
-  data.writeBigUInt64LE(p.maxTotalClaim, 8 + 32);
-
-  return new TransactionInstruction({
-    programId: p.programId,
-    keys: [
-      { pubkey: p.publishAuthority, isSigner: true, isWritable: false },
-      { pubkey: p.configPda, isSigner: false, isWritable: false },
-      { pubkey: p.otMint, isSigner: false, isWritable: false },
-      { pubkey: p.distributor, isSigner: false, isWritable: true },
-    ],
-    data,
-  });
 }
 
 async function sleep(ms: number, signal: AbortSignal): Promise<void> {
