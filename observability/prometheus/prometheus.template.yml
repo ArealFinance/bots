@@ -76,8 +76,11 @@ scrape_configs:
           - 'localhost:9105'   # yield-claim-crank
           - 'localhost:9106'   # nexus-manager
 
-  # Phase 22 — uncomment when chain-invariants exporter lands.
-  # - job_name: chain-invariants-${AREAL_ENV}
-  #   static_configs:
-  #     - targets:
-  #         - 'localhost:9201'
+  # Phase 22 — chain-invariants exporter (read-only on-chain watchdog).
+  # Bind 127.0.0.1:9201 inside the host network namespace; same scrape
+  # convention as bots-${AREAL_ENV}. Job name suffix mirrors the bots
+  # job so a multi-cluster federation later doesn't collide.
+  - job_name: chain-invariants-${AREAL_ENV}
+    static_configs:
+      - targets:
+          - 'localhost:9201'
