@@ -8,6 +8,7 @@ import {
 } from '@solana/web3.js';
 import { findDexConfigPda } from '@areal/sdk/pda';
 import { parseRwtVault } from '@areal/sdk/rwt-engine';
+import { type BotMetrics, classifyError } from '@areal/bots-shared';
 import { CONFIG } from './config.js';
 import { calculateNavBin, calculatePoolPrice, calculateDeviation } from './nav-calculator.js';
 
@@ -49,10 +50,15 @@ export class Rebalancer {
   private dexProgramId: PublicKey;
   private dexConfigPda: PublicKey;
   private lastShiftTime: Map<string, number> = new Map();
+  /** Phase 21: optional metrics — when wired, the shift_liquidity submit
+   *  is observed via observeTx(...) so each TX records bot_tx_total +
+   *  bot_tx_duration_seconds with the classified `result` label. */
+  private metrics?: BotMetrics;
 
-  constructor(connection: Connection, wallet: Keypair) {
+  constructor(connection: Connection, wallet: Keypair, metrics?: BotMetrics) {
     this.connection = connection;
     this.wallet = wallet;
+    this.metrics = metrics;
     this.dexProgramId = new PublicKey(CONFIG.DEX_PROGRAM_ID);
 
     // Derive DEX config PDA via the canonical SDK helper.
@@ -160,22 +166,42 @@ export class Rebalancer {
 
     const tx = new Transaction().add(ix);
 
-    for (let attempt = 1; attempt <= CONFIG.MAX_RETRIES; attempt++) {
-      try {
-        const sig = await sendAndConfirmTransaction(this.connection, tx, [this.wallet], {
-          commitment: 'confirmed',
-        });
-        console.log(`[rebalancer] shift_liquidity OK: pool=${pool.address.toBase58()}, nav_bin=${navBin}, sig=${sig}`);
-        return;
-      } catch (err) {
-        console.error(`[rebalancer] shift_liquidity attempt ${attempt}/${CONFIG.MAX_RETRIES} failed:`, err);
-        if (attempt < CONFIG.MAX_RETRIES) {
-          const delay = CONFIG.RETRY_DELAY_MS * Math.pow(2, attempt - 1);
-          await new Promise(r => setTimeout(r, delay));
+    const submitOnce = async (): Promise<string> => {
+      let lastErr: unknown;
+      for (let attempt = 1; attempt <= CONFIG.MAX_RETRIES; attempt++) {
+        try {
+          const sig = await sendAndConfirmTransaction(this.connection, tx, [this.wallet], {
+            commitment: 'confirmed',
+          });
+          console.log(`[rebalancer] shift_liquidity OK: pool=${pool.address.toBase58()}, nav_bin=${navBin}, sig=${sig}`);
+          return sig;
+        } catch (err) {
+          lastErr = err;
+          console.error(`[rebalancer] shift_liquidity attempt ${attempt}/${CONFIG.MAX_RETRIES} failed:`, err);
+          if (attempt < CONFIG.MAX_RETRIES) {
+            const delay = CONFIG.RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+            await new Promise(r => setTimeout(r, delay));
+          }
         }
       }
-    }
+      throw lastErr ?? new Error(
+        `shift_liquidity FAILED after ${CONFIG.MAX_RETRIES} retries for pool ${pool.address.toBase58()}`,
+      );
+    };
 
-    console.error(`[rebalancer] shift_liquidity FAILED after ${CONFIG.MAX_RETRIES} retries for pool ${pool.address.toBase58()}`);
+    // Phase 21: observe the WHOLE retry loop so bot_tx_total reflects
+    // outcomes per shift attempt (one per logical decision), not transient
+    // per-attempt RPC blips.
+    try {
+      if (this.metrics) {
+        await this.metrics.observeTx('shift_liquidity', submitOnce, classifyError);
+      } else {
+        await submitOnce();
+      }
+    } catch {
+      // Original semantics — log and continue (caller's loop tolerates
+      // failures; checkAndRebalance won't crash the main while-true loop).
+      console.error(`[rebalancer] shift_liquidity FAILED after ${CONFIG.MAX_RETRIES} retries for pool ${pool.address.toBase58()}`);
+    }
   }
 }

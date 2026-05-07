@@ -1,5 +1,6 @@
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
 import { findBinArrayPda, findRwtVaultPda } from '@areal/sdk/pda';
+import { createBotMetrics } from '@areal/bots-shared';
 import { CONFIG } from './config.js';
 import { Rebalancer } from './rebalancer.js';
 import * as fs from 'fs';
@@ -13,6 +14,14 @@ async function main() {
   console.log(`[pool-rebalancer] Check interval: ${CONFIG.CHECK_INTERVAL_MS}ms`);
   console.log(`[pool-rebalancer] Threshold: ${CONFIG.REBALANCE_THRESHOLD * 100}%`);
   console.log(`[pool-rebalancer] Target bin count: ${CONFIG.TARGET_BIN_COUNT}`);
+
+  // Phase 21: prom-client metrics surface. BOT_METRICS_PORT is supplied by
+  // scripts/lib/start-bots.ts (locked port 9103 for pool-rebalancer).
+  const metricsPort = parseInt(process.env.BOT_METRICS_PORT ?? '0', 10);
+  if (!metricsPort) {
+    console.error('[pool-rebalancer] BOT_METRICS_PORT env not set');
+    process.exit(1);
+  }
 
   // Load rebalancer keypair
   if (!CONFIG.REBALANCER_KEYPAIR) {
@@ -31,9 +40,43 @@ async function main() {
 
   console.log(`[pool-rebalancer] Rebalancer wallet: ${wallet.publicKey.toBase58()}`);
 
+  const metrics = createBotMetrics({
+    bot: 'pool-rebalancer',
+    instructions: ['shift_liquidity'],
+    port: metricsPort,
+    startedAt: new Date(),
+    walletPubkey: wallet.publicKey.toBase58(),
+  });
+
   const connection = new Connection(CONFIG.RPC_URL, 'confirmed');
-  const rebalancer = new Rebalancer(connection, wallet);
+  const rebalancer = new Rebalancer(connection, wallet, metrics);
   const dexProgramId = new PublicKey(CONFIG.DEX_PROGRAM_ID);
+
+  // Phase 21: 60s heartbeat — refresh wallet SOL gauge.
+  const metricsHeartbeat = setInterval(() => {
+    void (async (): Promise<void> => {
+      try {
+        const lamports = await connection.getBalance(wallet.publicKey, 'confirmed');
+        metrics.walletSol.set(lamports / 1e9);
+      } catch {
+        /* surfaces via downstream alerts */
+      }
+    })();
+  }, 60_000);
+  metricsHeartbeat.unref();
+
+  const onShutdown = async (signal: string): Promise<void> => {
+    console.log(`[pool-rebalancer] received ${signal}, shutting down`);
+    clearInterval(metricsHeartbeat);
+    try {
+      await metrics.shutdown();
+    } catch (err) {
+      console.error('[pool-rebalancer] metrics shutdown failed', err);
+    }
+    process.exit(0);
+  };
+  process.once('SIGINT', () => void onShutdown('SIGINT'));
+  process.once('SIGTERM', () => void onShutdown('SIGTERM'));
 
   // Main loop
   while (true) {
