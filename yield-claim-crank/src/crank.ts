@@ -6,8 +6,10 @@ import {
 } from '@solana/web3.js';
 
 import {
+  type BotMetrics,
   MultiRpcClient,
   assertCrankBalance,
+  classifyError,
   logger,
   reconcileEvents,
   resolveMinLamportsFromEnv,
@@ -111,8 +113,9 @@ export async function processVaultClaim(args: {
   otMint: PublicKey;
   inputs: VaultClaimInputs | null; // null → log decision only
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): Promise<ClaimDecision> {
-  const { conn, cfg, checkpoint, fetcher, otMint, inputs, client } = args;
+  const { conn, cfg, checkpoint, fetcher, otMint, inputs, client, metrics } = args;
 
   const [distributor] = findMerkleDistributorPda(otMint, cfg.ydProgramId);
   const [rwtVault] = findRwtVaultPda(cfg.rwtEngineProgramId);
@@ -185,6 +188,7 @@ export async function processVaultClaim(args: {
     key: otMint.toBase58(),
     decision,
     client,
+    metrics,
   });
 }
 
@@ -205,8 +209,9 @@ export async function processPoolCompound(args: {
   pool: PublicKey;
   inputs: PoolCompoundInputs | null;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): Promise<ClaimDecision> {
-  const { conn, cfg, checkpoint, fetcher, pool, inputs, client } = args;
+  const { conn, cfg, checkpoint, fetcher, pool, inputs, client, metrics } = args;
   if (!inputs) {
     // Without inputs we can't even derive distributor / claim status meaningfully;
     // log a hint and return.
@@ -264,6 +269,7 @@ export async function processPoolCompound(args: {
     key: pool.toBase58(),
     decision,
     client,
+    metrics,
   });
 }
 
@@ -285,8 +291,9 @@ export async function processTreasuryClaim(args: {
   ydOtMint: PublicKey;
   inputs: TreasuryClaimInputs | null;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): Promise<ClaimDecision> {
-  const { conn, cfg, checkpoint, fetcher, otMint, ydOtMint, inputs, client } = args;
+  const { conn, cfg, checkpoint, fetcher, otMint, ydOtMint, inputs, client, metrics } = args;
   const [otTreasury] = findOtTreasuryPda(otMint, cfg.otProgramId);
   const [distributor] = findMerkleDistributorPda(ydOtMint, cfg.ydProgramId);
 
@@ -353,7 +360,28 @@ export async function processTreasuryClaim(args: {
     key,
     decision,
     client,
+    metrics,
   });
+}
+
+/**
+ * Phase 21: map per-flow `ClaimKind` ('vault' | 'pool' | 'treasury') to the
+ * locked instruction enum declared at bot startup. Three discrete on-chain
+ * instructions, three discrete metric series.
+ */
+function instructionForKind(kind: ClaimKind): string {
+  switch (kind) {
+    case 'vault':
+      return 'claim_yd_to_vault';
+    case 'pool':
+      return 'claim_yd_to_pool';
+    case 'treasury':
+      return 'claim_yd_for_treasury';
+    default: {
+      const _exhaustive: never = kind;
+      throw new Error(`unknown ClaimKind: ${String(_exhaustive)}`);
+    }
+  }
 }
 
 async function sendAndCheckpoint(args: {
@@ -365,8 +393,9 @@ async function sendAndCheckpoint(args: {
   key: string;
   decision: ClaimDecision & { kind: 'send' };
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): Promise<ClaimDecision> {
-  const { conn, cfg, checkpoint, tx, kind, key, decision, client } = args;
+  const { conn, cfg, checkpoint, tx, kind, key, decision, client, metrics } = args;
 
   // SEND_TX gate (Substep 13). When disabled, surface the decision and exit.
   if (!cfg.sendTx) {
@@ -379,18 +408,23 @@ async function sendAndCheckpoint(args: {
   }
 
   try {
-    // R29 sweep: prefer multi-RPC fallback when available.
-    const sig = client
-      ? await client.withFallback((c) =>
-          sendAndConfirmTransaction(c, tx, [cfg.crankKeypair], {
+    // R29 sweep: prefer multi-RPC fallback when available. Phase 21:
+    // observeTx records bot_tx_total / bot_tx_duration_seconds per kind.
+    const submit = (): Promise<string> =>
+      client
+        ? client.withFallback((c) =>
+            sendAndConfirmTransaction(c, tx, [cfg.crankKeypair], {
+              commitment: 'confirmed',
+              skipPreflight: false,
+            }),
+          )
+        : sendAndConfirmTransaction(conn, tx, [cfg.crankKeypair], {
             commitment: 'confirmed',
             skipPreflight: false,
-          }),
-        )
-      : await sendAndConfirmTransaction(conn, tx, [cfg.crankKeypair], {
-          commitment: 'confirmed',
-          skipPreflight: false,
-        });
+          });
+    const sig = metrics
+      ? await metrics.observeTx(instructionForKind(kind), submit, classifyError)
+      : await submit();
     logger.info(`${kind} claim OK`, {
       key,
       sig,
@@ -486,8 +520,9 @@ export async function runClaimCycle(args: {
   fetcher: ProofFetcher;
   lock: SingleFlightLock;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): Promise<void> {
-  const { conn, cfg, checkpoint, fetcher, lock, client } = args;
+  const { conn, cfg, checkpoint, fetcher, lock, client, metrics } = args;
 
   // R-60: shared SOL pre-flight. When SEND_TX is enabled and the wallet is
   // dry, every per-flow submit would burn an RPC round-trip only to surface
@@ -528,6 +563,7 @@ export async function runClaimCycle(args: {
         otMint: ot,
         inputs: null,
         client,
+        metrics,
       });
     } finally {
       lock.release(k);
@@ -547,6 +583,7 @@ export async function runClaimCycle(args: {
         pool,
         inputs: null,
         client,
+        metrics,
       });
     } finally {
       lock.release(k);
@@ -567,6 +604,7 @@ export async function runClaimCycle(args: {
         ydOtMint,
         inputs: null,
         client,
+        metrics,
       });
     } finally {
       lock.release(k);
@@ -610,6 +648,7 @@ export async function runOnce(args: {
   fetcher: ProofFetcher;
   lock: SingleFlightLock;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): Promise<void> {
   await runClaimCycle(args);
 }
@@ -622,6 +661,7 @@ export async function runLoop(args: {
   lock: SingleFlightLock;
   signal: AbortSignal;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): Promise<void> {
   const { signal } = args;
   while (!signal.aborted) {
@@ -647,6 +687,7 @@ export function subscribeRootPublished(args: {
   fetcher: ProofFetcher;
   lock: SingleFlightLock;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): { unsubscribe: () => Promise<void> } {
   const { conn, cfg, checkpoint } = args;
   const subId = conn.onLogs(
@@ -685,8 +726,9 @@ export async function reconcileSinceLastSeen(args: {
   fetcher: ProofFetcher;
   lock: SingleFlightLock;
   signal?: AbortSignal;
+  metrics?: BotMetrics;
 }): Promise<number> {
-  const { client, cfg, checkpoint, fetcher, lock, signal } = args;
+  const { client, cfg, checkpoint, fetcher, lock, signal, metrics } = args;
   const programKey = cfg.ydProgramId.toBase58();
   const fromSlot = checkpoint.getLastSeenSlot(programKey);
   if (fromSlot === null) {
@@ -700,7 +742,7 @@ export async function reconcileSinceLastSeen(args: {
       async ({ slot }) => {
         if (signal?.aborted) return;
         try {
-          await runClaimCycle({ conn, cfg, checkpoint, fetcher, lock });
+          await runClaimCycle({ conn, cfg, checkpoint, fetcher, lock, client, metrics });
         } catch (err) {
           logger.error('reconcile-triggered runClaimCycle failed', err);
         }
