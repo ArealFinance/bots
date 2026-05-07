@@ -64,10 +64,33 @@ EXPECTED_AUTHORITY_FUTARCHY_CONFIG
 EXPECTED_AUTHORITY_RWT_VAULT
 EXPECTED_AUTHORITY_DEX_CONFIG
 EXPECTED_AUTHORITY_YD_DISTRIBUTION_CONFIG
+
+# Optional — when set, enables full PDA self-derivation check (I1)
+OT_MINT
 ```
 
 All keys are validated eagerly at startup — a missing or malformed value
 fails fast with a descriptive error.
+
+### Startup self-derivation (Phase 22.5 / I1)
+
+At startup, every operator-supplied `PDA_*` env var is cross-checked
+against the SDK's PDA helpers using the canonical program IDs. A
+mismatch is fail-fast (process exits non-zero before the HTTP server
+starts).
+
+| PDA env var                  | Helper                                       | Validated when… |
+|------------------------------|----------------------------------------------|-----------------|
+| `PDA_DEX_CONFIG`             | `findDexConfigPda(NATIVE_DEX_PROGRAM_ID)`    | always          |
+| `PDA_RWT_VAULT`              | `findRwtVaultPda(RWT_ENGINE_PROGRAM_ID)`     | always          |
+| `PDA_YD_DISTRIBUTION_CONFIG` | `findYdConfigPda(YIELD_DISTRIBUTION_PROGRAM_ID)` | always      |
+| `PDA_OT_GOVERNANCE`          | `findOtGovernancePda(OT_MINT, OWNERSHIP_TOKEN_PROGRAM_ID)` | `OT_MINT` set |
+| `PDA_FUTARCHY_CONFIG`        | `findFutarchyConfigPda(OT_MINT, FUTARCHY_PROGRAM_ID)`      | `OT_MINT` set |
+| `PDA_YD_MERKLE_DISTRIBUTOR`  | `findMerkleDistributorPda(OT_MINT, YIELD_DISTRIBUTION_PROGRAM_ID)` | `OT_MINT` set |
+
+When `OT_MINT` is unset, the 3 per-OT PDAs are trusted to the operator
+and a `pda_self_derivation_partial` warning is logged at startup so the
+gap is visible in audit.
 
 ## Endpoints
 

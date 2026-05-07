@@ -18,6 +18,19 @@
 
 import { Connection, PublicKey } from '@solana/web3.js';
 import { logger, redactUrl } from '@areal/bots-shared';
+import {
+  findDexConfigPda,
+  findRwtVaultPda,
+  findYdConfigPda,
+  findOtGovernancePda,
+  findFutarchyConfigPda,
+  findMerkleDistributorPda,
+  NATIVE_DEX_PROGRAM_ID,
+  RWT_ENGINE_PROGRAM_ID,
+  YIELD_DISTRIBUTION_PROGRAM_ID,
+  OWNERSHIP_TOKEN_PROGRAM_ID,
+  FUTARCHY_PROGRAM_ID,
+} from '@areal/sdk';
 import { createMetricsServer, type ChainInvariantsMetrics } from './metrics.js';
 import { createBadgesHandler, DEFAULT_THRESHOLDS } from './badges.js';
 import {
@@ -38,7 +51,7 @@ import {
 
 // ---- Config ---------------------------------------------------------------
 
-interface Config {
+export interface Config {
   rpcUrl: string;
   metricsPort: number;
   pollIntervalMs: number;
@@ -51,6 +64,16 @@ interface Config {
   dexConfig: PublicKey;
   // Expected authorities (Q5: one env per contract)
   expectedAuthorities: Record<ContractName, PublicKey>;
+  /**
+   * I1 — optional OT mint. When set, the startup self-derivation check
+   * also validates the per-OT PDAs (ot_governance, futarchy_config,
+   * yd_merkle_distributor). When unset, those PDAs are trusted to the
+   * operator (a warning is logged once at startup so the gap is
+   * visible in audit). The 3 singleton PDAs (dex_config, rwt_vault,
+   * yd_distribution_config) are always self-derived and validated
+   * regardless of OT_MINT.
+   */
+  otMint?: PublicKey;
 }
 
 function getEnv(name: string, env: NodeJS.ProcessEnv): string {
@@ -63,6 +86,20 @@ function getEnv(name: string, env: NodeJS.ProcessEnv): string {
 
 function getEnvPubkey(name: string, env: NodeJS.ProcessEnv): PublicKey {
   const v = getEnv(name, env);
+  try {
+    return new PublicKey(v);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`chain-invariants: env ${name}="${v}" is not a valid pubkey (${msg})`);
+  }
+}
+
+function getOptionalEnvPubkey(
+  name: string,
+  env: NodeJS.ProcessEnv,
+): PublicKey | undefined {
+  const v = env[name];
+  if (v === undefined || v === '') return undefined;
   try {
     return new PublicKey(v);
   } catch (err) {
@@ -117,7 +154,114 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     futarchyConfig: getEnvPubkey('PDA_FUTARCHY_CONFIG', env),
     dexConfig: getEnvPubkey('PDA_DEX_CONFIG', env),
     expectedAuthorities,
+    otMint: getOptionalEnvPubkey('OT_MINT', env),
   };
+}
+
+// ---- I1: PDA self-derivation startup check --------------------------------
+
+/**
+ * One PDA whose env-supplied address did not match what the SDK helper
+ * derives from the canonical seeds.
+ */
+export interface PdaMismatch {
+  /** Env var name the operator set, e.g. `PDA_DEX_CONFIG`. */
+  envVar: string;
+  /** What the operator put in that env var. */
+  envValue: string;
+  /** What the SDK's deriver returned (canonical truth). */
+  derived: string;
+  /** SDK helper used (for the error log). */
+  helper: string;
+}
+
+/**
+ * I1 — startup self-derivation check.
+ *
+ * Operator-supplied PDA env vars (`PDA_*`) are trusted today; a typo or
+ * a stale .env that points at the wrong cluster's PDA would silently
+ * make the exporter watch the wrong account. Re-derive each PDA via the
+ * SDK helpers using the canonical program IDs and assert equality.
+ *
+ * Three singletons are always validated:
+ *   - PDA_DEX_CONFIG               ← findDexConfigPda(NATIVE_DEX_PROGRAM_ID)
+ *   - PDA_RWT_VAULT                ← findRwtVaultPda(RWT_ENGINE_PROGRAM_ID)
+ *   - PDA_YD_DISTRIBUTION_CONFIG   ← findYdConfigPda(YIELD_DISTRIBUTION_PROGRAM_ID)
+ *
+ * Three per-OT PDAs are validated only when `OT_MINT` is supplied, since
+ * an operator might genuinely need to override these (e.g., monitoring a
+ * second OT mint for testing). Skipping them is logged loudly:
+ *   - PDA_OT_GOVERNANCE           ← findOtGovernancePda(otMint, OWNERSHIP_TOKEN_PROGRAM_ID)
+ *   - PDA_FUTARCHY_CONFIG         ← findFutarchyConfigPda(otMint, FUTARCHY_PROGRAM_ID)
+ *   - PDA_YD_MERKLE_DISTRIBUTOR   ← findMerkleDistributorPda(otMint, YIELD_DISTRIBUTION_PROGRAM_ID)
+ *
+ * Pure function — does no I/O — so it's trivially testable.
+ *
+ * @returns array of mismatches; empty array means everything checked is
+ * canonical. Caller decides what to do (main() exits non-zero).
+ */
+export function verifyPdaDerivation(config: Config): PdaMismatch[] {
+  const mismatches: PdaMismatch[] = [];
+
+  // Always-validated singletons.
+  const checkSingleton = (
+    envVar: string,
+    helper: string,
+    actual: PublicKey,
+    derived: PublicKey,
+  ): void => {
+    if (!actual.equals(derived)) {
+      mismatches.push({
+        envVar,
+        envValue: actual.toBase58(),
+        derived: derived.toBase58(),
+        helper,
+      });
+    }
+  };
+
+  checkSingleton(
+    'PDA_DEX_CONFIG',
+    'findDexConfigPda(NATIVE_DEX_PROGRAM_ID)',
+    config.dexConfig,
+    findDexConfigPda(NATIVE_DEX_PROGRAM_ID)[0],
+  );
+  checkSingleton(
+    'PDA_RWT_VAULT',
+    'findRwtVaultPda(RWT_ENGINE_PROGRAM_ID)',
+    config.rwtVault,
+    findRwtVaultPda(RWT_ENGINE_PROGRAM_ID)[0],
+  );
+  checkSingleton(
+    'PDA_YD_DISTRIBUTION_CONFIG',
+    'findYdConfigPda(YIELD_DISTRIBUTION_PROGRAM_ID)',
+    config.ydDistributionConfig,
+    findYdConfigPda(YIELD_DISTRIBUTION_PROGRAM_ID)[0],
+  );
+
+  // Per-OT PDAs — only when OT_MINT is supplied.
+  if (config.otMint) {
+    checkSingleton(
+      'PDA_OT_GOVERNANCE',
+      'findOtGovernancePda(OT_MINT, OWNERSHIP_TOKEN_PROGRAM_ID)',
+      config.otGovernance,
+      findOtGovernancePda(config.otMint, OWNERSHIP_TOKEN_PROGRAM_ID)[0],
+    );
+    checkSingleton(
+      'PDA_FUTARCHY_CONFIG',
+      'findFutarchyConfigPda(OT_MINT, FUTARCHY_PROGRAM_ID)',
+      config.futarchyConfig,
+      findFutarchyConfigPda(config.otMint, FUTARCHY_PROGRAM_ID)[0],
+    );
+    checkSingleton(
+      'PDA_YD_MERKLE_DISTRIBUTOR',
+      'findMerkleDistributorPda(OT_MINT, YIELD_DISTRIBUTION_PROGRAM_ID)',
+      config.ydMerkleDistributor,
+      findMerkleDistributorPda(config.otMint, YIELD_DISTRIBUTION_PROGRAM_ID)[0],
+    );
+  }
+
+  return mismatches;
 }
 
 // ---- Metric application ---------------------------------------------------
@@ -285,7 +429,40 @@ async function main(): Promise<void> {
     rpc: redactUrl(config.rpcUrl),
     port: config.metricsPort,
     interval_ms: config.pollIntervalMs,
+    ot_mint_pinned: config.otMint ? config.otMint.toBase58() : null,
   });
+
+  // I1 — verify operator-supplied PDAs match SDK self-derivation BEFORE the
+  // HTTP server starts (and BEFORE any RPC). A mismatch is a misconfiguration
+  // that would silently watch the wrong account; fail-fast with a clear log.
+  const mismatches = verifyPdaDerivation(config);
+  if (mismatches.length > 0) {
+    for (const m of mismatches) {
+      logger.error('pda_self_derivation_mismatch', undefined, {
+        env_var: m.envVar,
+        env_value: m.envValue,
+        derived: m.derived,
+        helper: m.helper,
+      });
+    }
+    throw new Error(
+      `chain-invariants: ${mismatches.length} PDA env var(s) do not match SDK self-derivation — refusing to start`,
+    );
+  }
+  if (!config.otMint) {
+    // Loud, but recoverable: per-OT PDAs are not validated. Fine for v1
+    // (the operator owns those env vars), but the gap is visible in audit.
+    logger.warn('pda_self_derivation_partial', {
+      reason: 'OT_MINT not set',
+      skipped_pdas: [
+        'PDA_OT_GOVERNANCE',
+        'PDA_FUTARCHY_CONFIG',
+        'PDA_YD_MERKLE_DISTRIBUTOR',
+      ],
+    });
+  } else {
+    logger.info('pda_self_derivation_ok', { ot_mint: config.otMint.toBase58() });
+  }
 
   const connection = new Connection(config.rpcUrl, 'confirmed');
   const ctx: CheckContext = {
@@ -369,7 +546,26 @@ async function main(): Promise<void> {
   logger.info('chain_invariants_running');
 }
 
-main().catch((err) => {
-  logger.error('fatal', err);
-  process.exit(1);
-});
+// Gate the auto-bootstrap so importing this module from a test (to call
+// `verifyPdaDerivation` or `loadConfig` in isolation) does NOT spin up
+// the HTTP server or attempt to load the operator's env. We only run
+// main() when this file IS the process entrypoint.
+//
+// `import.meta.url` is a `file://` URL; `process.argv[1]` is a plain
+// path. Convert to URL and compare.
+const isEntrypoint = (() => {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    return import.meta.url === new URL(`file://${argv1}`).href;
+  } catch {
+    return false;
+  }
+})();
+
+if (isEntrypoint) {
+  main().catch((err) => {
+    logger.error('fatal', err);
+    process.exit(1);
+  });
+}
