@@ -3,11 +3,11 @@ import {
   Keypair,
   PublicKey,
   Transaction,
-  TransactionInstruction,
   sendAndConfirmTransaction,
 } from '@solana/web3.js';
 import { findDexConfigPda } from '@areal/sdk/pda';
 import { parseRwtVault } from '@areal/sdk/rwt-engine';
+import { buildShiftLiquidityIx } from '@areal/sdk/tx';
 import { CONFIG } from './config.js';
 import { calculateNavBin, calculatePoolPrice, calculateDeviation } from './nav-calculator.js';
 
@@ -133,29 +133,15 @@ export class Rebalancer {
   }
 
   private async executeShift(pool: PoolInfo, navBin: number): Promise<void> {
-    // Build shift_liquidity instruction
-    // Instruction data: [discriminator(8), nav_bin(i32 LE), target_bin_count(u16 LE)]
-    const data = Buffer.alloc(14);
-    // Discriminator for shift_liquidity (hash of "global:shift_liquidity" — first 8 bytes)
-    // Using Arlex convention: sha256("global:shift_liquidity")[0..8]
-    const crypto = await import('crypto');
-    const discriminator = crypto.createHash('sha256')
-      .update('global:shift_liquidity')
-      .digest()
-      .subarray(0, 8);
-    discriminator.copy(data, 0);
-    data.writeInt32LE(navBin, 8);
-    data.writeUInt16LE(CONFIG.TARGET_BIN_COUNT, 12);
-
-    const ix = new TransactionInstruction({
-      programId: this.dexProgramId,
-      keys: [
-        { pubkey: this.wallet.publicKey, isSigner: true, isWritable: false },
-        { pubkey: this.dexConfigPda, isSigner: false, isWritable: false },
-        { pubkey: pool.address, isSigner: false, isWritable: true },
-        { pubkey: pool.binArrayPda, isSigner: false, isWritable: true },
-      ],
-      data,
+    // Build shift_liquidity via SDK (canonical discriminator + account list).
+    const ix = buildShiftLiquidityIx({
+      dexProgramId: this.dexProgramId,
+      rebalancer: this.wallet.publicKey,
+      dexConfig: this.dexConfigPda,
+      poolState: pool.address,
+      binArray: pool.binArrayPda,
+      navBin,
+      targetBinCount: CONFIG.TARGET_BIN_COUNT,
     });
 
     const tx = new Transaction().add(ix);
