@@ -1,8 +1,10 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 
 import {
+  type BotMetrics,
   MultiRpcClient,
   assertCrankBalance,
+  classifyError,
   logger,
   reconcileEvents,
   resolveMinLamportsFromEnv,
@@ -165,8 +167,9 @@ export async function processOt(args: {
   checkpoint: CheckpointStore;
   otMint: PublicKey;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): Promise<ConvertDecision> {
-  const { conn, cfg, checkpoint, otMint, client } = args;
+  const { conn, cfg, checkpoint, otMint, client, metrics } = args;
 
   const ctxOrErr = await readConvertContext({ conn, cfg, otMint });
   if ('kind' in ctxOrErr && ctxOrErr.kind === 'rpc_error') {
@@ -381,9 +384,14 @@ export async function processOt(args: {
         computeUnitPriceMicroLamports: cfg.computeUnitPriceMicroLamports,
       }).then(({ signature }) => ({ signature }));
 
-    const { signature } = client
-      ? await client.withFallback(submit)
-      : await submit(conn);
+    // Phase 21: when metrics is wired, observe the submit so each TX is
+    // recorded in bot_tx_total + bot_tx_duration_seconds with the
+    // classified `result` label and on-success drives markProgress().
+    const submitWithFallback = (): Promise<{ signature: string }> =>
+      client ? client.withFallback(submit) : submit(conn);
+    const { signature } = metrics
+      ? await metrics.observeTx('convert_to_rwt', submitWithFallback, classifyError)
+      : await submitWithFallback();
 
     logger.info('convert_to_rwt OK', {
       ot: otMint.toBase58(),
@@ -427,8 +435,9 @@ export async function runOnce(args: {
   checkpoint: CheckpointStore;
   lock: SingleFlightLock;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): Promise<ConvertDecision[]> {
-  const { conn, cfg, checkpoint, lock, client } = args;
+  const { conn, cfg, checkpoint, lock, client, metrics } = args;
   const out: ConvertDecision[] = [];
   for (const ot of cfg.otProjects) {
     const key = ot.toBase58();
@@ -437,7 +446,7 @@ export async function runOnce(args: {
       continue;
     }
     try {
-      out.push(await processOt({ conn, cfg, checkpoint, otMint: ot, client }));
+      out.push(await processOt({ conn, cfg, checkpoint, otMint: ot, client, metrics }));
     } finally {
       lock.release(key);
     }
@@ -455,6 +464,7 @@ export async function runLoop(args: {
   lock: SingleFlightLock;
   signal: AbortSignal;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): Promise<void> {
   const { cfg, signal } = args;
   while (!signal.aborted) {
@@ -479,8 +489,9 @@ export function subscribeRevenueDistributed(args: {
   lock: SingleFlightLock;
   otProgramId: PublicKey;
   client?: MultiRpcClient;
+  metrics?: BotMetrics;
 }): { unsubscribe: () => Promise<void> } {
-  const { conn, cfg, checkpoint, lock, otProgramId, client } = args;
+  const { conn, cfg, checkpoint, lock, otProgramId, client, metrics } = args;
   const subId = conn.onLogs(
     otProgramId,
     async (logs, ctx) => {
@@ -492,7 +503,7 @@ export function subscribeRevenueDistributed(args: {
         const key = ot.toBase58();
         if (!lock.acquire(key)) continue;
         try {
-          await processOt({ conn, cfg, checkpoint, otMint: ot, client });
+          await processOt({ conn, cfg, checkpoint, otMint: ot, client, metrics });
         } catch (e) {
           logger.error('WS-triggered convert processOt failed', e, { ot: key });
         } finally {
@@ -523,8 +534,9 @@ export async function reconcileSinceLastSeen(args: {
   checkpoint: CheckpointStore;
   lock: SingleFlightLock;
   signal?: AbortSignal;
+  metrics?: BotMetrics;
 }): Promise<number> {
-  const { client, cfg, checkpoint, lock, signal } = args;
+  const { client, cfg, checkpoint, lock, signal, metrics } = args;
   const programKey = cfg.otProgramId.toBase58();
   const fromSlot = checkpoint.getLastSeenSlot(programKey);
   if (fromSlot === null) {
@@ -543,7 +555,7 @@ export async function reconcileSinceLastSeen(args: {
           const key = ot.toBase58();
           if (!lock.acquire(key)) continue;
           try {
-            await processOt({ conn, cfg, checkpoint, otMint: ot, client });
+            await processOt({ conn, cfg, checkpoint, otMint: ot, client, metrics });
           } catch (e) {
             logger.error('reconcile-triggered processOt failed', e, { ot: key });
           } finally {
