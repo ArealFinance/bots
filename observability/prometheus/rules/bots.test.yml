@@ -104,6 +104,10 @@ tests:
           - exp_labels:
               severity: warning
               bot: yield-claim-crank
+            exp_annotations:
+              summary: "Bot yield-claim-crank wallet SOL balance low"
+              description: "Bot yield-claim-crank signer wallet has less than 0.1 SOL — top up before TX failures cascade."
+              runbook: "https://docs.areal.finance/operations/runbooks/bot-wallet-low"
 
   - interval: 1m
     input_series:
@@ -126,6 +130,10 @@ tests:
           - exp_labels:
               severity: warning
               bot: pool-rebalancer
+            exp_annotations:
+              summary: "Bot pool-rebalancer RPC fallback rate elevated"
+              description: "Bot pool-rebalancer is failing over RPC endpoints at >0.5/s for 10m — primary endpoint likely degraded."
+              runbook: "https://docs.areal.finance/operations/runbooks/bot-rpc-fallback-high"
 
   - interval: 1m
     input_series:
