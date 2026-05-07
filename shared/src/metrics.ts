@@ -272,6 +272,17 @@ export function createBotMetrics(opts: CreateBotMetricsOptions): BotMetrics {
       res.end();
       return;
     }
+    // SECURITY (Phase 21.5 INFO 7a): explicit method gate. Only GET/HEAD
+    // are valid for metrics scrapes and health probes — refuse anything
+    // else with 405 + Allow header so misconfigured clients (and probes
+    // from a compromised neighbour container) get a clear, predictable
+    // rejection instead of a 404 or any side-effect path.
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      res.statusCode = 405;
+      res.setHeader('Allow', 'GET, HEAD');
+      res.end();
+      return;
+    }
     if (req.url === '/metrics') {
       try {
         const body = await registry.metrics();

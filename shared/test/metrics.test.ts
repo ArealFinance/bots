@@ -83,6 +83,33 @@ async function curl(port: number, path: string): Promise<{ status: number; ct: s
   });
 }
 
+/** Same shape as curl() but lets the caller pick the HTTP method — used to
+ *  exercise the 405 method gate on /metrics + /healthz. */
+async function curlMethod(
+  port: number,
+  path: string,
+  method: 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'OPTIONS',
+): Promise<{ status: number; allow: string; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { host: '127.0.0.1', port, path, method },
+      res => {
+        const chunks: Buffer[] = [];
+        res.on('data', c => chunks.push(c));
+        res.on('end', () => {
+          resolve({
+            status: res.statusCode ?? 0,
+            allow: (res.headers['allow'] as string) ?? '',
+            body: Buffer.concat(chunks).toString('utf8'),
+          });
+        });
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
 afterEach(async () => {
   // Drain in reverse to avoid port-reuse races within a single test file.
   while (instances.length > 0) {
@@ -164,6 +191,29 @@ describe('createBotMetrics — HTTP server', () => {
     make({ port });
     const res = await curlReady(port, '/whatever');
     expect(res.status).toBe(404);
+  });
+
+  it('non-GET/HEAD on /metrics returns 405 with Allow header (Phase 21.5 INFO 7a)', async () => {
+    const port = await pickPort();
+    make({ port });
+    // Make sure the server is up before issuing the method-gate probes.
+    await curlReady(port, '/healthz');
+    for (const method of ['POST', 'PUT', 'DELETE', 'PATCH'] as const) {
+      const res = await curlMethod(port, '/metrics', method);
+      expect(res.status).toBe(405);
+      expect(res.allow).toBe('GET, HEAD');
+    }
+  });
+
+  it('non-GET/HEAD on /healthz returns 405 with Allow header (Phase 21.5 INFO 7a)', async () => {
+    const port = await pickPort();
+    make({ port });
+    await curlReady(port, '/healthz');
+    for (const method of ['POST', 'PUT', 'DELETE', 'PATCH'] as const) {
+      const res = await curlMethod(port, '/healthz', method);
+      expect(res.status).toBe(405);
+      expect(res.allow).toBe('GET, HEAD');
+    }
   });
 
   it('shutdown() closes the server', async () => {
