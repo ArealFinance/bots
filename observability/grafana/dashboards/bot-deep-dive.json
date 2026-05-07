@@ -1,0 +1,158 @@
+{
+  "uid": "bot-deep-dive",
+  "title": "Areal — Bot Deep Dive",
+  "tags": ["areal", "bots", "deep-dive"],
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "env",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(bot_alive, env)",
+        "refresh": 2
+      },
+      {
+        "name": "bot",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(bot_alive{env=~\"$env\"}, bot)",
+        "refresh": 2,
+        "current": { "text": "merkle-publisher", "value": "merkle-publisher" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Alive",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "expr": "bot_alive{env=~\"$env\",bot=\"$bot\"}" }]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Wallet SOL",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "expr": "bot_wallet_sol{env=~\"$env\",bot=\"$bot\"}" }]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "SQLite size",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "targets": [{ "expr": "bot_sqlite_size_bytes{env=~\"$env\",bot=\"$bot\"}" }]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Last progress (s ago)",
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "targets": [
+        { "expr": "time() - bot_last_progress_timestamp_seconds{env=~\"$env\",bot=\"$bot\"}" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Bot info",
+      "gridPos": { "x": 16, "y": 0, "w": 8, "h": 4 },
+      "targets": [
+        {
+          "expr": "bot_info{env=~\"$env\",bot=\"$bot\"}",
+          "format": "table",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "TX rate by instruction",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (instruction) (rate(bot_tx_total{env=~\"$env\",bot=\"$bot\"}[5m]))",
+          "legendFormat": "{{instruction}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "TX result breakdown",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(bot_tx_total{env=~\"$env\",bot=\"$bot\"}[5m]))",
+          "legendFormat": "{{result}}"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "TX duration p50",
+      "gridPos": { "x": 0, "y": 12, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.5, sum by (le, instruction) (rate(bot_tx_duration_seconds_bucket{env=~\"$env\",bot=\"$bot\"}[5m])))",
+          "legendFormat": "p50 {{instruction}}"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "TX duration p95",
+      "gridPos": { "x": 8, "y": 12, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, instruction) (rate(bot_tx_duration_seconds_bucket{env=~\"$env\",bot=\"$bot\"}[5m])))",
+          "legendFormat": "p95 {{instruction}}"
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "TX duration p99",
+      "gridPos": { "x": 16, "y": 12, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, instruction) (rate(bot_tx_duration_seconds_bucket{env=~\"$env\",bot=\"$bot\"}[5m])))",
+          "legendFormat": "p99 {{instruction}}"
+        }
+      ]
+    },
+    {
+      "id": 30,
+      "type": "timeseries",
+      "title": "RPC fallback rate (by endpoint)",
+      "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (endpoint) (rate(bot_rpc_fallback_total{env=~\"$env\",bot=\"$bot\"}[5m]))",
+          "legendFormat": "{{endpoint}}"
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "KMS sign duration p95 (publisher only)",
+      "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, provider) (rate(bot_kms_sign_duration_seconds_bucket{env=~\"$env\",bot=\"$bot\"}[5m])))",
+          "legendFormat": "p95 {{provider}}"
+        }
+      ],
+      "options": { "hideZero": true }
+    }
+  ]
+}

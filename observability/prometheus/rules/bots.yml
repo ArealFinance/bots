@@ -1,0 +1,79 @@
+# Phase 21 — bot instrumentation alerts. Each rule keys off prom-client
+# series exported by `bots/shared/src/metrics.ts`. The `env` /
+# `cluster` / `network` labels arrive via Prometheus external_labels
+# (see prometheus.template.yml), so per-environment routing is
+# transparent — alerts fire identically on testnet/devnet/mainnet
+# stacks.
+#
+# Severity rationale:
+#   - critical: bot is provably non-functional (no heartbeat, KMS
+#     dead). Pages on-call immediately.
+#   - warning: bot is degraded but recoverable (high error rate, low
+#     SOL, RPC failover storm). Routes to chat.
+
+groups:
+  - name: bots
+    rules:
+      - alert: BotDown
+        expr: bot_alive == 0 or absent(bot_alive)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bot {{ $labels.bot }} is down"
+          description: "Bot {{ $labels.bot }} has not heartbeat for 5+ minutes (env={{ $externalLabels.env }})."
+          runbook: "https://docs.areal.finance/operations/runbooks/bot-down"
+
+      - alert: BotTxErrorRateHigh
+        expr: |
+          sum by (bot) (rate(bot_tx_total{result!="ok"}[10m]))
+          /
+          clamp_min(sum by (bot) (rate(bot_tx_total[10m])), 0.001)
+          > 0.20
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bot {{ $labels.bot }} TX error rate >20% (10m)"
+          description: "Over 20% of TX submits for {{ $labels.bot }} ended in error over the last 10m."
+          runbook: "https://docs.areal.finance/operations/runbooks/bot-tx-error-rate-high"
+
+      - alert: BotNoProgress
+        expr: time() - bot_last_progress_timestamp_seconds > 1800
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bot {{ $labels.bot }} no progress for 30m"
+          description: "Bot {{ $labels.bot }} has not recorded a successful tick in over 30 minutes."
+          runbook: "https://docs.areal.finance/operations/runbooks/bot-no-progress"
+
+      - alert: BotWalletLow
+        expr: bot_wallet_sol < 0.1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bot {{ $labels.bot }} wallet SOL balance low"
+          description: "Bot {{ $labels.bot }} signer wallet has less than 0.1 SOL — top up before TX failures cascade."
+          runbook: "https://docs.areal.finance/operations/runbooks/bot-wallet-low"
+
+      - alert: BotRpcFallbackHigh
+        expr: sum by (bot) (rate(bot_rpc_fallback_total[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Bot {{ $labels.bot }} RPC fallback rate elevated"
+          description: "Bot {{ $labels.bot }} is failing over RPC endpoints at >0.5/s for 10m — primary endpoint likely degraded."
+          runbook: "https://docs.areal.finance/operations/runbooks/bot-rpc-fallback-high"
+
+      - alert: BotKmsSignFailures
+        expr: sum by (bot, provider) (rate(bot_kms_sign_total{result!="ok"}[10m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Bot {{ $labels.bot }} KMS sign failing (provider={{ $labels.provider }})"
+          description: "KMS sign operations are failing — publisher cannot submit publish_root. Investigate KMS auth/network."
+          runbook: "https://docs.areal.finance/operations/runbooks/bot-kms-sign-failures"

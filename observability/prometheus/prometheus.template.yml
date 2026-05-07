@@ -58,23 +58,23 @@ scrape_configs:
       - target_label: __address__
         replacement: localhost:9115
 
-  # Phase 21 — uncomment when bot instrumentation lands.
-  # Each crank binds 127.0.0.1:910X on the host; prometheus shares host
-  # network namespace, so localhost:910X works directly.
+  # Phase 21 — bot instrumentation (prom-client) is live. Each crank binds
+  # 127.0.0.1:910X on the host; prometheus shares the host network
+  # namespace, so localhost:910X works directly.
   #
   # Job name is suffixed with the env (`bots-${AREAL_ENV}`) so that when a
   # second cluster's bots are added later (e.g. another scrape_config block
   # for `bots-mainnet` reaching across a WireGuard mesh), they do not
   # collide on `job` label and stay distinguishable in Grafana.
-  # - job_name: bots-${AREAL_ENV}
-  #   static_configs:
-  #     - targets:
-  #         - 'localhost:9101'   # merkle-publisher
-  #         - 'localhost:9102'   # revenue-crank
-  #         - 'localhost:9103'   # pool-rebalancer
-  #         - 'localhost:9104'   # convert-and-fund-crank
-  #         - 'localhost:9105'   # yield-claim-crank
-  #         - 'localhost:9106'   # nexus-manager
+  - job_name: bots-${AREAL_ENV}
+    static_configs:
+      - targets:
+          - 'localhost:9101'   # merkle-publisher
+          - 'localhost:9102'   # revenue-crank
+          - 'localhost:9103'   # pool-rebalancer
+          - 'localhost:9104'   # convert-and-fund-crank
+          - 'localhost:9105'   # yield-claim-crank
+          - 'localhost:9106'   # nexus-manager
 
   # Phase 22 — uncomment when chain-invariants exporter lands.
   # - job_name: chain-invariants-${AREAL_ENV}

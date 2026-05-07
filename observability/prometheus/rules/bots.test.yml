@@ -1,0 +1,156 @@
+# Phase 21 — promtool unit tests for bots.yml.
+# Run from this directory:
+#   promtool test rules bots.test.yml
+#
+# Each block exercises one alert with a positive (fires) and a
+# negative (does NOT fire) scenario.
+
+rule_files:
+  - bots.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------- BotDown ----------------
+  - interval: 1m
+    input_series:
+      - series: 'bot_alive{bot="merkle-publisher"}'
+        values: '0+0x10'    # 0 for 10 minutes
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BotDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              bot: merkle-publisher
+            exp_annotations:
+              summary: "Bot merkle-publisher is down"
+              description: "Bot merkle-publisher has not heartbeat for 5+ minutes (env=)."
+              runbook: "https://docs.areal.finance/operations/runbooks/bot-down"
+
+  - interval: 1m
+    input_series:
+      - series: 'bot_alive{bot="merkle-publisher"}'
+        values: '1+0x10'    # alive throughout
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BotDown
+        exp_alerts: []      # NO alert
+
+  # ---------------- BotTxErrorRateHigh ----------------
+  - interval: 1m
+    input_series:
+      - series: 'bot_tx_total{bot="revenue-crank",instruction="distribute_revenue",result="ok"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10'                # 1/min ok
+      - series: 'bot_tx_total{bot="revenue-crank",instruction="distribute_revenue",result="rpc_error"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10'                # 1/min error → 50% > 20%
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: BotTxErrorRateHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              bot: revenue-crank
+            exp_annotations:
+              summary: "Bot revenue-crank TX error rate >20% (10m)"
+              description: "Over 20% of TX submits for revenue-crank ended in error over the last 10m."
+              runbook: "https://docs.areal.finance/operations/runbooks/bot-tx-error-rate-high"
+
+  - interval: 1m
+    input_series:
+      - series: 'bot_tx_total{bot="revenue-crank",instruction="distribute_revenue",result="ok"}'
+        values: '0 1 2 3 4 5 6 7 8 9 10'                # all ok, 0% error
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: BotTxErrorRateHigh
+        exp_alerts: []
+
+  # ---------------- BotNoProgress ----------------
+  - interval: 1m
+    input_series:
+      - series: 'bot_last_progress_timestamp_seconds{bot="nexus-manager"}'
+        values: '0+0x60'    # frozen at 0 for 60 minutes; time() - 0 > 1800
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: BotNoProgress
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              bot: nexus-manager
+
+  - interval: 1m
+    input_series:
+      # Use eval_time-relative seconds to keep diff < 1800s.
+      - series: 'bot_last_progress_timestamp_seconds{bot="nexus-manager"}'
+        values: '60+60x10'  # progresses every minute
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: BotNoProgress
+        exp_alerts: []
+
+  # ---------------- BotWalletLow ----------------
+  - interval: 1m
+    input_series:
+      - series: 'bot_wallet_sol{bot="yield-claim-crank"}'
+        values: '0.05+0x15'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: BotWalletLow
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              bot: yield-claim-crank
+
+  - interval: 1m
+    input_series:
+      - series: 'bot_wallet_sol{bot="yield-claim-crank"}'
+        values: '5.0+0x15'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: BotWalletLow
+        exp_alerts: []
+
+  # ---------------- BotRpcFallbackHigh ----------------
+  - interval: 1m
+    input_series:
+      - series: 'bot_rpc_fallback_total{bot="pool-rebalancer",endpoint="rpc1"}'
+        values: '0+60x15'   # 60/min = 1/s > 0.5/s threshold
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: BotRpcFallbackHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              bot: pool-rebalancer
+
+  - interval: 1m
+    input_series:
+      - series: 'bot_rpc_fallback_total{bot="pool-rebalancer",endpoint="rpc1"}'
+        values: '0+0x15'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: BotRpcFallbackHigh
+        exp_alerts: []
+
+  # ---------------- BotKmsSignFailures ----------------
+  - interval: 1m
+    input_series:
+      - series: 'bot_kms_sign_total{bot="merkle-publisher",provider="gcp",result="rpc_error"}'
+        values: '0+1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BotKmsSignFailures
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              bot: merkle-publisher
+              provider: gcp
+
+  - interval: 1m
+    input_series:
+      - series: 'bot_kms_sign_total{bot="merkle-publisher",provider="gcp",result="ok"}'
+        values: '0+1x10'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: BotKmsSignFailures
+        exp_alerts: []
