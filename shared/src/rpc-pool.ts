@@ -37,6 +37,18 @@ export interface MultiRpcClientOptions {
   commitment?: Commitment;
   /** Extra options passed through to each `Connection` constructor. */
   connectionConfig?: Omit<ConnectionConfig, 'wsEndpoint' | 'commitment'>;
+  /**
+   * Phase 21: invoked on every fallback hop with a redacted endpoint
+   * label. Cranks wire this to `metrics.rpcFallbackTotal` so each
+   * failover is observable. The callback runs inside the catch block;
+   * a thrown callback never masks the underlying RPC error (we wrap
+   * the call in try/catch).
+   *
+   * Cardinality note: `endpoint` label cardinality is bounded by the
+   * operator's `RPC_URLS` env (typically ≤5 endpoints). Operator policy
+   * enforces ≤10 to keep the prom series count predictable.
+   */
+  onFallback?: (endpoint: string) => void;
 }
 
 /**
@@ -50,7 +62,11 @@ export interface MultiRpcClientOptions {
 export class MultiRpcClient {
   private readonly endpoints: RpcEndpoint[];
   private readonly connections: Map<string, Connection>;
-  private readonly options: Required<MultiRpcClientOptions>;
+  private readonly options: {
+    commitment: Commitment;
+    connectionConfig: NonNullable<MultiRpcClientOptions['connectionConfig']>;
+    onFallback: ((endpoint: string) => void) | undefined;
+  };
 
   constructor(endpoints: RpcEndpoint[], options: MultiRpcClientOptions = {}) {
     if (endpoints.length === 0) {
@@ -62,6 +78,7 @@ export class MultiRpcClient {
     this.options = {
       commitment: options.commitment ?? 'confirmed',
       connectionConfig: options.connectionConfig ?? {},
+      onFallback: options.onFallback,
     };
 
     this.connections = new Map();
@@ -154,6 +171,16 @@ export class MultiRpcClient {
           failureCount: ep.failureCount,
           error: err instanceof Error ? err.message : String(err),
         });
+        // Phase 21: surface the failover to the caller's metrics. Wrap in
+        // try/catch so a thrown callback never masks the underlying RPC
+        // error (which the AggregateError below would otherwise lose).
+        if (this.options.onFallback) {
+          try {
+            this.options.onFallback(redactUrl(ep.url));
+          } catch {
+            /* swallow — metric recording must never become a new failure mode */
+          }
+        }
       }
     }
     throw new AggregateError(errors, 'MultiRpcClient: all endpoints failed');
