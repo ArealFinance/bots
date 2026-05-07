@@ -54,11 +54,16 @@ import {
   buildDexCompoundIx,
   buildOtTreasuryClaimIx,
   buildDistributeRevenueIx,
+  buildPublishRootIx,
+  buildShiftLiquidityIx,
   type BuildRwtClaimYieldArgs as BuildRwtClaimArgs,
   type BuildDexCompoundArgs,
   type BuildOtTreasuryClaimArgs,
   type BuildDistributeRevenueArgs,
+  type BuildPublishRootArgs,
+  type BuildShiftLiquidityArgs,
 } from '@areal/sdk/tx';
+import { findYdConfigPda, findDexConfigPda } from '@areal/sdk/pda';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -429,6 +434,90 @@ test('parity distribute_revenue: crank ix == dashboard-style ix', async () => {
 });
 
 // ============================================================================
+// publish_root (YD::publish_root)
+// ============================================================================
+
+test('parity publish_root: crank ix == dashboard-style ix', async () => {
+  const [ydConfigPda] = findYdConfigPda(pk('yd_program'));
+  const merkleRoot = new Uint8Array(32).fill(0xee);
+
+  const args: BuildPublishRootArgs = {
+    ydProgramId: pk('yd_program'),
+    publishAuthority: pk('signer'),
+    config: ydConfigPda,
+    otMint: pk('ot_mint'),
+    distributor: pk('yd_distributor'),
+    merkleRoot,
+    maxTotalClaim: 0xdeadbeefn,
+  };
+
+  const built = buildPublishRootIx(args);
+
+  // Mirror dashboard builder byte-for-byte.
+  const disc = await discWeb('publish_root');
+  const data = new Uint8Array(8 + 32 + 8);
+  data.set(disc, 0);
+  data.set(merkleRoot, 8);
+  writeU64LE(data, 8 + 32, args.maxTotalClaim);
+
+  const dashIx = new TransactionInstruction({
+    programId: args.ydProgramId,
+    data: Buffer.from(data),
+    keys: [
+      { pubkey: args.publishAuthority, isSigner: true, isWritable: false },
+      { pubkey: args.config, isSigner: false, isWritable: false },
+      { pubkey: args.otMint, isSigner: false, isWritable: false },
+      { pubkey: args.distributor, isSigner: false, isWritable: true },
+    ],
+  });
+
+  assertIxEqual(built, dashIx);
+});
+
+// ============================================================================
+// shift_liquidity (DEX::shift_liquidity)
+// ============================================================================
+
+test('parity shift_liquidity: crank ix == dashboard-style ix', async () => {
+  const [dexConfigPda] = findDexConfigPda(pk('dex_program'));
+
+  const args: BuildShiftLiquidityArgs = {
+    dexProgramId: pk('dex_program'),
+    rebalancer: pk('signer'),
+    dexConfig: dexConfigPda,
+    poolState: pk('dex_pool_state'),
+    binArray: pk('dex_bin_array'),
+    navBin: -12345,
+    targetBinCount: 0xbeef,
+  };
+
+  const built = buildShiftLiquidityIx(args);
+
+  // Mirror dashboard builder byte-for-byte.
+  const disc = await discWeb('shift_liquidity');
+  const data = new Uint8Array(8 + 4 + 2);
+  data.set(disc, 0);
+  // i32 LE — emulate via signed cast.
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  view.setInt32(8, args.navBin, true);
+  data[12] = args.targetBinCount & 0xff;
+  data[13] = (args.targetBinCount >>> 8) & 0xff;
+
+  const dashIx = new TransactionInstruction({
+    programId: args.dexProgramId,
+    data: Buffer.from(data),
+    keys: [
+      { pubkey: args.rebalancer, isSigner: true, isWritable: false },
+      { pubkey: args.dexConfig, isSigner: false, isWritable: false },
+      { pubkey: args.poolState, isSigner: false, isWritable: true },
+      { pubkey: args.binArray, isSigner: false, isWritable: true },
+    ],
+  });
+
+  assertIxEqual(built, dashIx);
+});
+
+// ============================================================================
 // withdraw_liquidity_holding — gated R20.
 //
 // The crank has no production builder for this ix (deferred to the dashboard
@@ -619,6 +708,46 @@ async function buildAllFingerprints(): Promise<Record<string, string>> {
     };
     const built = buildDistributeRevenueIx(args);
     out['distribute_revenue'] = fingerprintIx('distribute_revenue', {
+      programId: built.programId,
+      data: Buffer.from(built.data),
+      keys: built.keys,
+    });
+  }
+
+  // publish_root
+  {
+    const [ydConfigPda] = findYdConfigPda(pk('yd_program'));
+    const args: BuildPublishRootArgs = {
+      ydProgramId: pk('yd_program'),
+      publishAuthority: pk('signer'),
+      config: ydConfigPda,
+      otMint: pk('ot_mint'),
+      distributor: pk('yd_distributor'),
+      merkleRoot: new Uint8Array(32).fill(0xee),
+      maxTotalClaim: 0xdeadbeefn,
+    };
+    const built = buildPublishRootIx(args);
+    out['publish_root'] = fingerprintIx('publish_root', {
+      programId: built.programId,
+      data: Buffer.from(built.data),
+      keys: built.keys,
+    });
+  }
+
+  // shift_liquidity
+  {
+    const [dexConfigPda] = findDexConfigPda(pk('dex_program'));
+    const args: BuildShiftLiquidityArgs = {
+      dexProgramId: pk('dex_program'),
+      rebalancer: pk('signer'),
+      dexConfig: dexConfigPda,
+      poolState: pk('dex_pool_state'),
+      binArray: pk('dex_bin_array'),
+      navBin: -12345,
+      targetBinCount: 0xbeef,
+    };
+    const built = buildShiftLiquidityIx(args);
+    out['shift_liquidity'] = fingerprintIx('shift_liquidity', {
       programId: built.programId,
       data: Buffer.from(built.data),
       keys: built.keys,

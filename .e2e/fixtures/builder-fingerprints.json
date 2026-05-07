@@ -3,5 +3,7 @@
   "claim_yield": "9ea310e6a2acbfaf91f76bb369d1a876c80f17b5b8c715c4dd4c579e28b14155",
   "compound_yield": "139aa1a571497940366601f9fca1a596f28c969b5270121348ae69b3955a0627",
   "convert_to_rwt": "95e281b6e32cb487981e1cf13e1a31b830e617839f1f3b939363836720391ea7",
-  "distribute_revenue": "f5ca8af0718478ab5a3a0ddd9b7bfcf2b1b250f85909d8bc03d602103aa36b46"
+  "distribute_revenue": "f5ca8af0718478ab5a3a0ddd9b7bfcf2b1b250f85909d8bc03d602103aa36b46",
+  "publish_root": "d052f1db570361664cb0eace94b49b0603e5bd8d4041f55c2baf038796de014b",
+  "shift_liquidity": "ce44aaa4ea60d35b350d67ff57ba3d941a9b2fa21e767a1ca9aeb3194baa9021"
 }
