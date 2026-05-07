@@ -33,9 +33,11 @@ import {
 
 import {
   AlreadyRunningError,
+  type BotMetrics,
   MultiRpcClient,
   SingleInstanceLock,
   assertCrankBalance,
+  classifyError,
   logger,
   redactUrl,
   resolveMinLamportsFromEnv,
@@ -81,6 +83,29 @@ export interface CrankDeps {
   checkpoint: CheckpointStore;
   /** Resolved at startup — derived from `cfg.dexProgramId` + the Manager pubkey. */
   baseCtx: NexusAccountContext;
+  /** Phase 21: optional metrics — when wired, the per-decision submit is
+   *  observed under one of three instruction labels (nexus_swap /
+   *  nexus_add_liquidity / nexus_remove_liquidity). 'noop' and 'killSwitch'
+   *  decisions skip TX submission entirely and therefore are NOT counted
+   *  in bot_tx_total — keeps the metric reflecting only real on-chain
+   *  submits. */
+  metrics?: BotMetrics;
+}
+
+/** Phase 21: lock the decision.kind → instruction-label mapping. */
+function instructionForDecisionKind(kind: 'swap' | 'addLiquidity' | 'removeLiquidity'): string {
+  switch (kind) {
+    case 'swap':
+      return 'nexus_swap';
+    case 'addLiquidity':
+      return 'nexus_add_liquidity';
+    case 'removeLiquidity':
+      return 'nexus_remove_liquidity';
+    default: {
+      const _exhaustive: never = kind;
+      throw new Error(`unknown decision kind: ${String(_exhaustive)}`);
+    }
+  }
 }
 
 /**
@@ -265,15 +290,26 @@ export async function runManagerCycle(deps: CrankDeps): Promise<Decision | null>
     // All endpoints failed — let the actual submit raise.
   }
 
-  // 8. Submit via fallback.
+  // 8. Submit via fallback. Phase 21: observe via metrics.observeTx so each
+  //    decision-driven submit hits bot_tx_total / bot_tx_duration_seconds
+  //    under the instruction label mapped from decision.kind.
   let signature: string | null = null;
   try {
-    signature = await client.withFallback(conn =>
-      sendAndConfirmTransaction(conn, tx, [manager], {
-        commitment: 'confirmed',
-        skipPreflight: false,
-      }),
-    );
+    const submit = (): Promise<string> =>
+      client.withFallback(conn =>
+        sendAndConfirmTransaction(conn, tx, [manager], {
+          commitment: 'confirmed',
+          skipPreflight: false,
+        }),
+      );
+    const metrics = deps.metrics;
+    signature = metrics
+      ? await metrics.observeTx(
+          instructionForDecisionKind(decision.kind as 'swap' | 'addLiquidity' | 'removeLiquidity'),
+          submit,
+          classifyError,
+        )
+      : await submit();
     logger.info('nexus-manager: action submitted', {
       kind: decision.kind,
       pool: decision.pool.toBase58(),
@@ -311,8 +347,9 @@ export async function runCycle(args: {
   cfg: ManagerConfig;
   client: MultiRpcClient;
   checkpoint: CheckpointStore;
+  metrics?: BotMetrics;
 }): Promise<Decision | null> {
-  const { cfg, client, checkpoint } = args;
+  const { cfg, client, checkpoint, metrics } = args;
   const baseCtx = resolveBaseCtx(cfg);
   return runManagerCycle({
     cfg,
@@ -320,6 +357,7 @@ export async function runCycle(args: {
     manager: cfg.managerKeypair,
     checkpoint,
     baseCtx,
+    metrics,
   });
 }
 
@@ -332,8 +370,9 @@ export async function startManager(args: {
   cfg: ManagerConfig;
   client: MultiRpcClient;
   signal: AbortSignal;
+  metrics?: BotMetrics;
 }): Promise<void> {
-  const { cfg, client, signal } = args;
+  const { cfg, client, signal, metrics } = args;
 
   const lock = new SingleInstanceLock();
   try {
@@ -375,6 +414,7 @@ export async function startManager(args: {
           manager: cfg.managerKeypair,
           checkpoint,
           baseCtx,
+          metrics,
         });
       } catch (err) {
         logger.error('nexus-manager: cycle threw', err);
