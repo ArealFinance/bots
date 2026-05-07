@@ -54,8 +54,13 @@ export const TX_RESULTS: readonly TxResult[] = [
   'timeout',
 ] as const;
 
-/** KMS provider label — instruments all 4 sign sites in merkle-publisher. */
-export type KmsProvider = 'gcp' | 'local' | 'ed25519' | 'ec25519';
+/** KMS provider label — instruments the sign sites in merkle-publisher.
+ *  Locked taxonomy mirrors merkle-publisher/src/kms-signer.ts:
+ *    - 'local' — LocalMockSigner (devnet/testnet only)
+ *    - 'aws'   — AwsKmsSigner (ECC_ED25519)
+ *    - 'gcp'   — GcpKmsSigner (EC_SIGN_ED25519)
+ *  Future providers (Turnkey / Fireblocks / etc.) extend this union. */
+export type KmsProvider = 'local' | 'aws' | 'gcp';
 
 export interface CreateBotMetricsOptions {
   /** Bot name — drives `bot=` default label. */

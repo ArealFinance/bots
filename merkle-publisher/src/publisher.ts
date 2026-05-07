@@ -6,6 +6,8 @@ import {
 } from '@solana/web3.js';
 import { createHash } from 'node:crypto';
 import { findYdConfigPda } from '@areal/sdk/pda';
+import { type BotMetrics, classifyError } from '@areal/bots-shared';
+
 import type { BotConfig } from './config.js';
 import type { KmsSigner } from './kms-signer.js';
 import type { ProofStore } from './proof-store.js';
@@ -44,6 +46,12 @@ export class Publisher {
     private readonly signer: KmsSigner,
     private readonly snapshotStore: SnapshotStore,
     private readonly proofStore: ProofStore,
+    /** Phase 21: optional metrics — when present, the publish_root TX
+     *  retry loop is wrapped in observeTx so each submit is recorded
+     *  with classified `result` + duration. Whole-loop semantics: only
+     *  the FINAL outcome (success or exhausted retries) drives the
+     *  counter, not each per-attempt failure inside the retry loop. */
+    private readonly metrics?: BotMetrics,
   ) {}
 
   /** Run one pass — iterate distributors and publish where appropriate. */
@@ -291,45 +299,56 @@ export class Publisher {
 
     // Retry with exponential backoff for transient RPC/network errors.
     const delays = [2_000, 4_000, 8_000, 16_000, 32_000, 60_000];
-    let attempt = 0;
-    let lastErr: unknown;
 
-    while (attempt < delays.length) {
-      try {
-        const { blockhash, lastValidBlockHeight } = await this.conn.getLatestBlockhash('confirmed');
-        const tx = new Transaction({
-          feePayer: this.signer.publicKey,
-          blockhash,
-          lastValidBlockHeight,
-        });
-        tx.add(ix);
+    const submitOnce = async (): Promise<string> => {
+      let attempt = 0;
+      let lastErr: unknown;
+      while (attempt < delays.length) {
+        try {
+          const { blockhash, lastValidBlockHeight } = await this.conn.getLatestBlockhash('confirmed');
+          const tx = new Transaction({
+            feePayer: this.signer.publicKey,
+            blockhash,
+            lastValidBlockHeight,
+          });
+          tx.add(ix);
 
-        await this.signer.signTransaction(tx);
+          await this.signer.signTransaction(tx);
 
-        const sig = await this.conn.sendRawTransaction(tx.serialize(), {
-          skipPreflight: false,
-          preflightCommitment: 'confirmed',
-          maxRetries: 3,
-        });
-        await this.conn.confirmTransaction(
-          { signature: sig, blockhash, lastValidBlockHeight },
-          'confirmed',
-        );
-        return sig;
-      } catch (err) {
-        lastErr = err;
-        logger.warn('publish_root submit failed, retrying', {
-          attempt: attempt + 1,
-          delayMs: delays[attempt]!,
-        });
-        await new Promise(r => setTimeout(r, delays[attempt]!));
-        attempt += 1;
+          const sig = await this.conn.sendRawTransaction(tx.serialize(), {
+            skipPreflight: false,
+            preflightCommitment: 'confirmed',
+            maxRetries: 3,
+          });
+          await this.conn.confirmTransaction(
+            { signature: sig, blockhash, lastValidBlockHeight },
+            'confirmed',
+          );
+          return sig;
+        } catch (err) {
+          lastErr = err;
+          logger.warn('publish_root submit failed, retrying', {
+            attempt: attempt + 1,
+            delayMs: delays[attempt]!,
+          });
+          await new Promise(r => setTimeout(r, delays[attempt]!));
+          attempt += 1;
+        }
       }
-    }
 
-    throw new Error(
-      `publish_root exhausted retries: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`,
-    );
+      throw new Error(
+        `publish_root exhausted retries: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`,
+      );
+    };
+
+    // Phase 21: observe the WHOLE retry loop. The bot_tx_total counter
+    // therefore reflects publish-root *outcomes* (one per logical attempt),
+    // not transient per-attempt RPC blips — those still surface via the
+    // RPC-fallback counter when the connection rotates, and via Sentry/log
+    // alerts on prolonged retry storms.
+    return this.metrics
+      ? this.metrics.observeTx('publish_root', submitOnce, classifyError)
+      : submitOnce();
   }
 }
 

@@ -5,6 +5,8 @@ import {
   VersionedTransaction,
 } from '@solana/web3.js';
 import * as fs from 'node:fs';
+import type { BotMetrics, KmsProvider } from '@areal/bots-shared';
+
 import type { BotConfig } from './config.js';
 import { logger } from './logger.js';
 
@@ -31,6 +33,9 @@ import { logger } from './logger.js';
 export interface KmsSigner {
   /** Solana pubkey (ed25519) corresponding to the KMS key material. */
   readonly publicKey: PublicKey;
+
+  /** Phase 21: provider tag used as the `provider` metric label. */
+  readonly provider: KmsProvider;
 
   /** Sign a legacy Solana Transaction — adds signature in-place. */
   signTransaction(tx: Transaction): Promise<Transaction>;
@@ -99,9 +104,12 @@ export function parseEd25519Spki(spki: Uint8Array): Uint8Array {
  */
 export class LocalMockSigner implements KmsSigner {
   public readonly publicKey: PublicKey;
+  public readonly provider: KmsProvider = 'local';
   private readonly keypair: Keypair;
+  private readonly metrics?: BotMetrics;
 
-  constructor(keypairPath: string) {
+  constructor(keypairPath: string, metrics?: BotMetrics) {
+    this.metrics = metrics;
     if (!fs.existsSync(keypairPath)) {
       throw new Error(`LocalMockSigner: keypair file not found`);
     }
@@ -131,26 +139,38 @@ export class LocalMockSigner implements KmsSigner {
     });
   }
 
+  /** Phase 21: route every sign call through observeKmsSign when metrics
+   *  is wired. The wrap is a no-op when metrics is undefined (test paths). */
+  private observe<T>(op: () => Promise<T>): Promise<T> {
+    return this.metrics ? this.metrics.observeKmsSign(this.provider, op) : op();
+  }
+
   async signTransaction(tx: Transaction): Promise<Transaction> {
-    tx.partialSign(this.keypair);
-    return tx;
+    return this.observe(async () => {
+      tx.partialSign(this.keypair);
+      return tx;
+    });
   }
 
   async signVersionedTransaction(tx: VersionedTransaction): Promise<VersionedTransaction> {
-    tx.sign([this.keypair]);
-    return tx;
+    return this.observe(async () => {
+      tx.sign([this.keypair]);
+      return tx;
+    });
   }
 
   async signRaw(message: Uint8Array): Promise<Uint8Array> {
-    // Use tweetnacl-style ed25519 via Keypair's private key — @solana/web3.js
-    // doesn't expose sign-only, but we can use Node's crypto.sign with PKCS8
-    // import; simplest here is to re-use `nacl` via the keypair.
-    // Node 18+ ships native `crypto.sign(null, message, privateKeyObject)` for
-    // ed25519 keys — but without a PKCS8 wrapper we'd have to build one. Cheap
-    // alternative: use tweetnacl from @solana/web3.js's own bundle indirectly
-    // via a synchronous ed25519-sign path.
-    const { default: nacl } = await import('tweetnacl');
-    return nacl.sign.detached(message, this.keypair.secretKey);
+    return this.observe(async () => {
+      // Use tweetnacl-style ed25519 via Keypair's private key — @solana/web3.js
+      // doesn't expose sign-only, but we can use Node's crypto.sign with PKCS8
+      // import; simplest here is to re-use `nacl` via the keypair.
+      // Node 18+ ships native `crypto.sign(null, message, privateKeyObject)` for
+      // ed25519 keys — but without a PKCS8 wrapper we'd have to build one. Cheap
+      // alternative: use tweetnacl from @solana/web3.js's own bundle indirectly
+      // via a synchronous ed25519-sign path.
+      const { default: nacl } = await import('tweetnacl');
+      return nacl.sign.detached(message, this.keypair.secretKey);
+    });
   }
 }
 
@@ -179,6 +199,8 @@ export class LocalMockSigner implements KmsSigner {
  */
 export class AwsKmsSigner implements KmsSigner {
   public readonly publicKey: PublicKey;
+  public readonly provider: KmsProvider = 'aws';
+  private readonly metrics?: BotMetrics;
 
   // Kept narrow on purpose — we only need these two operations.
   private constructor(
@@ -188,11 +210,13 @@ export class AwsKmsSigner implements KmsSigner {
     private readonly SignCommand: new (input: Record<string, unknown>) => unknown,
     private readonly keyId: string,
     publicKey: PublicKey,
+    metrics?: BotMetrics,
   ) {
     this.publicKey = publicKey;
+    this.metrics = metrics;
   }
 
-  static async create(keyId: string, region: string): Promise<AwsKmsSigner> {
+  static async create(keyId: string, region: string, metrics?: BotMetrics): Promise<AwsKmsSigner> {
     const { KMSClient, GetPublicKeyCommand, SignCommand } = await import(
       '@aws-sdk/client-kms'
     );
@@ -217,27 +241,35 @@ export class AwsKmsSigner implements KmsSigner {
     logger.info('AwsKmsSigner ready', { pubkey: publicKey.toBase58() });
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return new AwsKmsSigner(client as any, SignCommand as any, keyId, publicKey);
+    return new AwsKmsSigner(client as any, SignCommand as any, keyId, publicKey, metrics);
+  }
+
+  /** Phase 21: route the underlying KMS call through observeKmsSign when
+   *  metrics is wired. */
+  private observe<T>(op: () => Promise<T>): Promise<T> {
+    return this.metrics ? this.metrics.observeKmsSign(this.provider, op) : op();
   }
 
   private async signMessageBytes(message: Uint8Array): Promise<Buffer> {
-    const cmd = new this.SignCommand({
-      KeyId: this.keyId,
-      Message: message,
-      MessageType: 'RAW',
-      SigningAlgorithm: 'EDDSA',
+    return this.observe(async () => {
+      const cmd = new this.SignCommand({
+        KeyId: this.keyId,
+        Message: message,
+        MessageType: 'RAW',
+        SigningAlgorithm: 'EDDSA',
+      });
+      const resp = await this.client.send(cmd);
+      if (!resp.Signature) {
+        throw new Error('AwsKmsSigner: Sign returned no Signature');
+      }
+      const sig = Buffer.from(resp.Signature);
+      if (sig.length !== 64) {
+        throw new Error(
+          `AwsKmsSigner: expected 64-byte ed25519 signature, got ${sig.length}`,
+        );
+      }
+      return sig;
     });
-    const resp = await this.client.send(cmd);
-    if (!resp.Signature) {
-      throw new Error('AwsKmsSigner: Sign returned no Signature');
-    }
-    const sig = Buffer.from(resp.Signature);
-    if (sig.length !== 64) {
-      throw new Error(
-        `AwsKmsSigner: expected 64-byte ed25519 signature, got ${sig.length}`,
-      );
-    }
-    return sig;
   }
 
   async signTransaction(tx: Transaction): Promise<Transaction> {
@@ -270,17 +302,21 @@ export class AwsKmsSigner implements KmsSigner {
  */
 export class GcpKmsSigner implements KmsSigner {
   public readonly publicKey: PublicKey;
+  public readonly provider: KmsProvider = 'gcp';
+  private readonly metrics?: BotMetrics;
 
   private constructor(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     private readonly client: any,
     private readonly keyVersionName: string,
     publicKey: PublicKey,
+    metrics?: BotMetrics,
   ) {
     this.publicKey = publicKey;
+    this.metrics = metrics;
   }
 
-  static async create(keyVersionName: string): Promise<GcpKmsSigner> {
+  static async create(keyVersionName: string, metrics?: BotMetrics): Promise<GcpKmsSigner> {
     const { KeyManagementServiceClient } = await import('@google-cloud/kms');
     const client = new KeyManagementServiceClient();
 
@@ -301,24 +337,31 @@ export class GcpKmsSigner implements KmsSigner {
     const publicKey = new PublicKey(raw);
     logger.info('GcpKmsSigner ready', { pubkey: publicKey.toBase58() });
 
-    return new GcpKmsSigner(client, keyVersionName, publicKey);
+    return new GcpKmsSigner(client, keyVersionName, publicKey, metrics);
+  }
+
+  /** Phase 21: route asymmetricSign through observeKmsSign when wired. */
+  private observe<T>(op: () => Promise<T>): Promise<T> {
+    return this.metrics ? this.metrics.observeKmsSign(this.provider, op) : op();
   }
 
   private async signMessageBytes(message: Uint8Array): Promise<Buffer> {
-    const [resp] = await this.client.asymmetricSign({
-      name: this.keyVersionName,
-      data: message,
+    return this.observe(async () => {
+      const [resp] = await this.client.asymmetricSign({
+        name: this.keyVersionName,
+        data: message,
+      });
+      if (!resp?.signature) {
+        throw new Error('GcpKmsSigner: asymmetricSign returned no signature');
+      }
+      const sig = Buffer.from(resp.signature as Buffer | Uint8Array);
+      if (sig.length !== 64) {
+        throw new Error(
+          `GcpKmsSigner: expected 64-byte ed25519 signature, got ${sig.length}`,
+        );
+      }
+      return sig;
     });
-    if (!resp?.signature) {
-      throw new Error('GcpKmsSigner: asymmetricSign returned no signature');
-    }
-    const sig = Buffer.from(resp.signature as Buffer | Uint8Array);
-    if (sig.length !== 64) {
-      throw new Error(
-        `GcpKmsSigner: expected 64-byte ed25519 signature, got ${sig.length}`,
-      );
-    }
-    return sig;
   }
 
   async signTransaction(tx: Transaction): Promise<Transaction> {
@@ -355,18 +398,21 @@ function pemToDer(pem: string): Uint8Array {
  * Factory — async because AWS/GCP signers must probe the KMS before they are
  * usable.
  */
-export async function createKmsSigner(cfg: BotConfig): Promise<KmsSigner> {
+export async function createKmsSigner(
+  cfg: BotConfig,
+  metrics?: BotMetrics,
+): Promise<KmsSigner> {
   switch (cfg.kmsProvider) {
     case 'local':
       if (cfg.network === 'mainnet') {
         // Defense-in-depth (already checked in loadConfig).
         throw new Error('LocalMockSigner forbidden on mainnet');
       }
-      return new LocalMockSigner(cfg.kmsKeyId);
+      return new LocalMockSigner(cfg.kmsKeyId, metrics);
     case 'aws':
-      return AwsKmsSigner.create(cfg.kmsKeyId, cfg.awsRegion);
+      return AwsKmsSigner.create(cfg.kmsKeyId, cfg.awsRegion, metrics);
     case 'gcp':
-      return GcpKmsSigner.create(cfg.kmsKeyId);
+      return GcpKmsSigner.create(cfg.kmsKeyId, metrics);
     default: {
       const _exhaustive: never = cfg.kmsProvider;
       throw new Error(`Unknown KMS provider: ${String(_exhaustive)}`);

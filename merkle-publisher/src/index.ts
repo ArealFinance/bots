@@ -1,5 +1,9 @@
 import { Connection, PublicKey } from '@solana/web3.js';
+import * as fs from 'node:fs';
 import * as os from 'node:os';
+
+import { createBotMetrics } from '@areal/bots-shared';
+
 import { loadConfig } from './config.js';
 import { EventWatcher } from './event-watcher.js';
 import { createKmsSigner } from './kms-signer.js';
@@ -25,6 +29,20 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   setLogLevel(cfg.logLevel);
 
+  // Phase 21: prom-client metrics surface. BOT_METRICS_PORT is supplied by
+  // scripts/lib/start-bots.ts (locked port 9101 for merkle-publisher).
+  const metricsPort = parseInt(process.env.BOT_METRICS_PORT ?? '0', 10);
+  if (!metricsPort) {
+    throw new Error('merkle-publisher: BOT_METRICS_PORT env not set');
+  }
+  const metrics = createBotMetrics({
+    bot: 'merkle-publisher',
+    instructions: ['publish_root'],
+    port: metricsPort,
+    startedAt: new Date(),
+    walletPubkey: cfg.publisherPubkey.toBase58(),
+  });
+
   logger.info('merkle-publisher starting', {
     network: cfg.network,
     rpc: cfg.rpcUrl,
@@ -36,9 +54,10 @@ async function main(): Promise<void> {
     kms: cfg.kmsProvider,
     publishIntervalMs: cfg.publishIntervalMs,
     excludedHoldersCount: cfg.excludedHolders.length,
+    metricsPort,
   });
 
-  const signer = await createKmsSigner(cfg);
+  const signer = await createKmsSigner(cfg, metrics);
   if (!signer.publicKey.equals(cfg.publisherPubkey)) {
     throw new Error(
       `Signer pubkey ${signer.publicKey.toBase58()} does not match PUBLISHER_PUBKEY ${cfg.publisherPubkey.toBase58()}`,
@@ -155,7 +174,27 @@ async function main(): Promise<void> {
     snapshotStore,
   );
 
-  const publisher = new Publisher(cfg, primaryConn, signer, snapshotStore, proofStore);
+  const publisher = new Publisher(cfg, primaryConn, signer, snapshotStore, proofStore, metrics);
+
+  // Phase 21: 60s heartbeat — refresh wallet SOL gauge and SQLite size.
+  // Failures silenced (BotWalletLow / BotNoProgress alerts catch downstream).
+  const metricsHeartbeat = setInterval(() => {
+    void (async (): Promise<void> => {
+      try {
+        const lamports = await primaryConn.getBalance(signer.publicKey, 'confirmed');
+        metrics.walletSol.set(lamports / 1e9);
+      } catch {
+        /* let other metrics surface the issue */
+      }
+      try {
+        const stat = fs.statSync(cfg.dbPath);
+        metrics.sqliteSize.set(stat.size);
+      } catch {
+        /* db not yet open — ignore */
+      }
+    })();
+  }, 60_000);
+  metricsHeartbeat.unref();
 
   // Graceful shutdown handling.
   const stopController = new AbortController();
@@ -182,6 +221,7 @@ async function main(): Promise<void> {
     logger.info(`received ${signal}, shutting down`);
     stopController.abort();
     clearInterval(heartbeatTimer);
+    clearInterval(metricsHeartbeat);
     try {
       await eventWatcher.stop();
     } catch (err) {
@@ -190,6 +230,11 @@ async function main(): Promise<void> {
     // Give publisher.loop a moment to notice the abort and exit cleanly.
     await new Promise(r => setTimeout(r, 500));
     releaseAndClose();
+    try {
+      await metrics.shutdown();
+    } catch (err) {
+      logger.error('metrics shutdown failed', err);
+    }
     logger.info('shutdown complete');
     process.exit(exitCode);
   };

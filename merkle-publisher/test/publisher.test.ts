@@ -96,6 +96,7 @@ function fakeSigner(): KmsSigner {
   const kp = Keypair.generate();
   return {
     publicKey: kp.publicKey,
+    provider: 'local',
     async signTransaction(tx: Transaction): Promise<Transaction> {
       tx.partialSign(kp);
       return tx;
