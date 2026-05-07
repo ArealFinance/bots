@@ -47,6 +47,16 @@ export {
 } from './preflight.js';
 export type { AssertCrankBalanceResult } from './preflight.js';
 
+// Phase 21: prom-client metrics surface for off-chain bots. See
+// `metrics.ts` for design notes (cardinality budget, label taxonomy).
+export { createBotMetrics, TX_RESULTS } from './metrics.js';
+export type {
+  BotMetrics,
+  CreateBotMetricsOptions,
+  TxResult,
+  KmsProvider,
+} from './metrics.js';
+
 // SD-31 (Layer 10 closure): zero-authority-audit shared helper. Single
 // source of truth for the post-Phase-7 cross-contract assertion + the
 // dual deployer-zero-authority precheck. Replaces the earlier .cts
