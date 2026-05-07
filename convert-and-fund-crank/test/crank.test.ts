@@ -7,9 +7,9 @@ import { ComputeBudgetProgram, PublicKey, Keypair } from '@solana/web3.js';
 import { CheckpointStore } from '../src/checkpoint.js';
 import { parseRpcEndpoints } from '../src/config.js';
 import { decideConvert, SingleFlightLock } from '../src/crank.js';
+import { CONVERT_TO_RWT_DISCRIMINATOR } from '@areal/sdk/tx';
 import {
   buildConvertToRwtIx,
-  discConvertToRwt,
   sendConvertToRwt,
 } from '../src/convert.js';
 import {
@@ -253,7 +253,7 @@ describe('buildConvertToRwtIx', () => {
     expect(built.ix.programId.equals(YD_PROGRAM)).toBe(true);
     expect(built.ix.keys).toHaveLength(22);
     expect(built.ix.data.length).toBe(25);
-    expect(built.ix.data.subarray(0, 8).equals(discConvertToRwt())).toBe(true);
+    expect(built.ix.data.subarray(0, 8).equals(CONVERT_TO_RWT_DISCRIMINATOR())).toBe(true);
     expect(built.ix.data.readBigUInt64LE(8)).toBe(1_234_567n);
     expect(built.ix.data.readBigUInt64LE(16)).toBe(999_999n);
     expect(built.ix.data.readUInt8(24)).toBe(1);

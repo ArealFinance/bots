@@ -34,5 +34,6 @@
   "liquidity_holding":    60,
   "liquidity_holding_ata":61,
   "nexus_token_ata":      62,
-  "liquidity_nexus":      63
+  "liquidity_nexus":      63,
+  "dex_bin_array":        70
 }
