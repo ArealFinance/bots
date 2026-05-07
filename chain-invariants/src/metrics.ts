@@ -97,7 +97,7 @@ export function createMetrics(): ChainInvariantsMetrics {
 
   const authorityMatch = new Gauge({
     name: 'chain_invariant_authority_match',
-    help: 'On-chain authority vs expected: 1=match, 0=drift, -1=unable_to_fetch',
+    help: 'On-chain authority vs expected: 1=match, 0=drift|decode_error|account_not_found|wrong_owner, -1=rpc_error (transient)',
     labelNames: ['contract', 'authority'] as const,
     registers: [registry],
   });

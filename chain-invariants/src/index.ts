@@ -26,6 +26,7 @@ import {
   checkAuthorities,
   checkRwtSupply,
   CONTRACT_NAMES,
+  authorityOutcomeToMetricValue,
   type CheckContext,
   type CheckOutcome,
   type ContractName,
@@ -178,10 +179,12 @@ function applyAuthorityResult(
   outcome: CheckOutcome<AuthorityCheckResult[]>,
   expected: Record<ContractName, PublicKey>,
 ): void {
-  // Always emit a value for every contract: 1 (match), 0 (drift), or -1 (unknown).
+  // Always emit a value for every contract: 1 (match), 0 (drift class), or
+  // -1 (rpc_error / top-level failure — unknown).
   if (!outcome.ok) {
-    // Top-level failure — mark all 5 contracts unknown so the metric does
-    // not silently freeze on the previous value.
+    // Top-level failure: checkAuthorities never throws today (per-contract
+    // errors surface inside `value`), but defend against future regression
+    // by marking everything unknown.
     for (const c of CONTRACT_NAMES) {
       metrics.authorityMatch.set(
         { contract: c, authority: expected[c].toBase58() },
@@ -191,14 +194,14 @@ function applyAuthorityResult(
     return;
   }
   for (const r of outcome.value) {
-    let value: number;
-    if (r.actual.startsWith('<fetch_error') || r.actual === '<account_missing>') {
-      value = -1;
-    } else if (r.match) {
-      value = 1;
-    } else {
-      value = 0;
-    }
+    // Outcome → gauge mapping is centralised in
+    // `authorityOutcomeToMetricValue` so the alert contract stays in lock
+    // step with the check semantics:
+    //   - `chain_invariant_authority_match == 0` fires on
+    //     drift | decode_error | account_not_found | wrong_owner
+    //   - `chain_invariant_authority_match == -1` is the explicit
+    //     "transient infra blip" state and MUST NOT fire AuthorityDrift
+    const value = authorityOutcomeToMetricValue(r.outcome);
     // The authority label carries the EXPECTED pubkey (operator-supplied,
     // bounded cardinality of 5). NOT the on-chain "actual" — including
     // drifted values would explode cardinality on a sustained attack.

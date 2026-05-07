@@ -16,6 +16,13 @@ import { RWTVAULT_DISCRIMINATOR } from '@areal/sdk/rwt-engine';
 import { OTGOVERNANCE_DISCRIMINATOR } from '@areal/sdk/ownership-token';
 import { FUTARCHYCONFIG_DISCRIMINATOR } from '@areal/sdk/futarchy';
 import { DEXCONFIG_DISCRIMINATOR } from '@areal/sdk/native-dex';
+import {
+  OWNERSHIP_TOKEN_PROGRAM_ID,
+  FUTARCHY_PROGRAM_ID,
+  RWT_ENGINE_PROGRAM_ID,
+  NATIVE_DEX_PROGRAM_ID,
+  YIELD_DISTRIBUTION_PROGRAM_ID,
+} from '@areal/sdk';
 
 import {
   fetchLastTxAge,
@@ -24,6 +31,7 @@ import {
   checkAuthorities,
   checkRwtSupply,
   CONTRACT_NAMES,
+  authorityOutcomeToMetricValue,
 } from '../src/checks.js';
 import type { CheckContext, ContractName } from '../src/checks.js';
 
@@ -236,7 +244,10 @@ describe('checkMerkleRootAge', () => {
       getSignaturesForAddress: async () => [
         { signature: 'sig1', slot: 100, blockTime: NOW - 3600 },
       ],
-      getAccountInfo: async () => ({ data: distributorBuf, owner: distributorPda }),
+      getAccountInfo: async () => ({
+        data: distributorBuf,
+        owner: YIELD_DISTRIBUTION_PROGRAM_ID,
+      }),
     });
     const out = await checkMerkleRootAge(ctx, { distributorPda });
     expect(out.ok).toBe(true);
@@ -268,6 +279,7 @@ describe('checkMerkleRootAge', () => {
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.error).toMatch(/distributor_account_missing/);
   });
+
 });
 
 // ---------- Tests: checkNavAge ----------
@@ -284,7 +296,10 @@ describe('checkNavAge', () => {
       getSignaturesForAddress: async () => [
         { signature: 'navSig', slot: 200, blockTime: NOW - 7200 },
       ],
-      getAccountInfo: async () => ({ data: vaultBuf, owner: rwtVaultPda }),
+      getAccountInfo: async () => ({
+        data: vaultBuf,
+        owner: RWT_ENGINE_PROGRAM_ID,
+      }),
     });
     const out = await checkNavAge(ctx, { rwtVaultPda });
     expect(out.ok).toBe(true);
@@ -294,6 +309,7 @@ describe('checkNavAge', () => {
       expect(out.value.totalRwtSupply).toBe(1_000_000n);
     }
   });
+
 });
 
 // ---------- Tests: checkAuthorities ----------
@@ -310,125 +326,238 @@ describe('checkAuthorities', () => {
     return m;
   }
 
-  it('returns 5 results, all match=true when every contract has the expected authority', async () => {
-    const { ctx } = makeConnection({
-      getAccountInfo: async (pda: PublicKey) => {
-        if (pda.equals(otGovernancePda)) return { data: buildOtGovernanceBuffer(expectedAuthority), owner: otGovernancePda };
-        if (pda.equals(futarchyConfigPda)) return { data: buildFutarchyConfigBuffer(expectedAuthority), owner: futarchyConfigPda };
-        if (pda.equals(rwtVaultPda)) return { data: buildRwtVaultBuffer({ totalRwtSupply: 0n, navBookValue: 0n, authority: expectedAuthority, mint: rwtMint }), owner: rwtVaultPda };
-        if (pda.equals(dexConfigPda)) return { data: buildDexConfigBuffer(expectedAuthority), owner: dexConfigPda };
-        if (pda.equals(ydDistributionConfigPda)) return { data: buildDistributionConfigBuffer(expectedAuthority), owner: ydDistributionConfigPda };
-        return null;
-      },
-    });
-    const out = await checkAuthorities(ctx, {
+  // Helper: a fetcher that returns the canonical happy-path account for
+  // each PDA (correct owner program ID, correct discriminator, expected
+  // authority). Tests override individual entries to simulate fault
+  // conditions without re-stating the full mapping.
+  function makeHappyFetcher(
+    overrides: Partial<Record<ContractName, () => Promise<{ data: Buffer; owner: PublicKey } | null> | { data: Buffer; owner: PublicKey } | null>> = {},
+  ) {
+    return async (pda: PublicKey): Promise<{ data: Buffer; owner: PublicKey } | null> => {
+      // Support both sync and async overrides; both common in test fixtures.
+      const resolveOverride = async (name: ContractName) => {
+        const o = overrides[name];
+        if (o === undefined) return undefined;
+        const r = o();
+        return r instanceof Promise ? await r : r;
+      };
+      if (pda.equals(otGovernancePda)) {
+        const o = await resolveOverride('ot_governance');
+        if (o !== undefined) return o;
+        return {
+          data: buildOtGovernanceBuffer(expectedAuthority),
+          owner: OWNERSHIP_TOKEN_PROGRAM_ID,
+        };
+      }
+      if (pda.equals(futarchyConfigPda)) {
+        const o = await resolveOverride('futarchy_config');
+        if (o !== undefined) return o;
+        return {
+          data: buildFutarchyConfigBuffer(expectedAuthority),
+          owner: FUTARCHY_PROGRAM_ID,
+        };
+      }
+      if (pda.equals(rwtVaultPda)) {
+        const o = await resolveOverride('rwt_vault');
+        if (o !== undefined) return o;
+        return {
+          data: buildRwtVaultBuffer({
+            totalRwtSupply: 0n,
+            navBookValue: 0n,
+            authority: expectedAuthority,
+            mint: rwtMint,
+          }),
+          owner: RWT_ENGINE_PROGRAM_ID,
+        };
+      }
+      if (pda.equals(dexConfigPda)) {
+        const o = await resolveOverride('dex_config');
+        if (o !== undefined) return o;
+        return {
+          data: buildDexConfigBuffer(expectedAuthority),
+          owner: NATIVE_DEX_PROGRAM_ID,
+        };
+      }
+      if (pda.equals(ydDistributionConfigPda)) {
+        const o = await resolveOverride('yd_distribution_config');
+        if (o !== undefined) return o;
+        return {
+          data: buildDistributionConfigBuffer(expectedAuthority),
+          owner: YIELD_DISTRIBUTION_PROGRAM_ID,
+        };
+      }
+      return null;
+    };
+  }
+
+  function defaultArgs() {
+    return {
       otGovernancePda,
       futarchyConfigPda,
       rwtVaultPda,
       dexConfigPda,
       ydDistributionConfigPda,
       expected: expectedMap(),
-    });
+    };
+  }
+
+  it('returns 5 results, all match=true with outcome=match on happy path', async () => {
+    const { ctx } = makeConnection({ getAccountInfo: makeHappyFetcher() });
+    const out = await checkAuthorities(ctx, defaultArgs());
     expect(out.ok).toBe(true);
     if (out.ok) {
       expect(out.value).toHaveLength(5);
       for (const r of out.value) {
         expect(r.match).toBe(true);
+        expect(r.outcome).toBe('match');
         expect(r.actual).toBe(expectedAuthority.toBase58());
       }
       expect(out.value.map((r) => r.contract).sort()).toEqual([...CONTRACT_NAMES].sort());
     }
   });
 
-  it('flags one drift when a single contract has the wrong authority', async () => {
+  it('flags outcome=drift when a single contract has the wrong authority', async () => {
     const { ctx } = makeConnection({
-      getAccountInfo: async (pda: PublicKey) => {
-        if (pda.equals(rwtVaultPda)) return { data: buildRwtVaultBuffer({ totalRwtSupply: 0n, navBookValue: 0n, authority: wrongAuthority, mint: rwtMint }), owner: rwtVaultPda };
-        if (pda.equals(otGovernancePda)) return { data: buildOtGovernanceBuffer(expectedAuthority), owner: otGovernancePda };
-        if (pda.equals(futarchyConfigPda)) return { data: buildFutarchyConfigBuffer(expectedAuthority), owner: futarchyConfigPda };
-        if (pda.equals(dexConfigPda)) return { data: buildDexConfigBuffer(expectedAuthority), owner: dexConfigPda };
-        if (pda.equals(ydDistributionConfigPda)) return { data: buildDistributionConfigBuffer(expectedAuthority), owner: ydDistributionConfigPda };
-        return null;
-      },
+      getAccountInfo: makeHappyFetcher({
+        rwt_vault: () => ({
+          data: buildRwtVaultBuffer({
+            totalRwtSupply: 0n,
+            navBookValue: 0n,
+            authority: wrongAuthority,
+            mint: rwtMint,
+          }),
+          owner: RWT_ENGINE_PROGRAM_ID,
+        }),
+      }),
     });
-    const out = await checkAuthorities(ctx, {
-      otGovernancePda,
-      futarchyConfigPda,
-      rwtVaultPda,
-      dexConfigPda,
-      ydDistributionConfigPda,
-      expected: expectedMap(),
-    });
+    const out = await checkAuthorities(ctx, defaultArgs());
     expect(out.ok).toBe(true);
     if (out.ok) {
       const drifted = out.value.filter((r) => !r.match);
       expect(drifted).toHaveLength(1);
       expect(drifted[0]?.contract).toBe('rwt_vault');
+      expect(drifted[0]?.outcome).toBe('drift');
       expect(drifted[0]?.actual).toBe(wrongAuthority.toBase58());
     }
   });
 
-  it('reports fetch_error in actual field on partial fetch failure (other contracts still reported)', async () => {
+  it('reports outcome=rpc_error when getAccountInfo throws (other 4 still reported)', async () => {
     const { ctx } = makeConnection({
-      getAccountInfo: async (pda: PublicKey) => {
-        if (pda.equals(otGovernancePda)) {
+      getAccountInfo: makeHappyFetcher({
+        ot_governance: () => {
           throw new Error('rpc_blackhole');
-        }
-        if (pda.equals(futarchyConfigPda)) return { data: buildFutarchyConfigBuffer(expectedAuthority), owner: futarchyConfigPda };
-        if (pda.equals(rwtVaultPda)) return { data: buildRwtVaultBuffer({ totalRwtSupply: 0n, navBookValue: 0n, authority: expectedAuthority, mint: rwtMint }), owner: rwtVaultPda };
-        if (pda.equals(dexConfigPda)) return { data: buildDexConfigBuffer(expectedAuthority), owner: dexConfigPda };
-        if (pda.equals(ydDistributionConfigPda)) return { data: buildDistributionConfigBuffer(expectedAuthority), owner: ydDistributionConfigPda };
-        return null;
-      },
+        },
+      }),
     });
-    const out = await checkAuthorities(ctx, {
-      otGovernancePda,
-      futarchyConfigPda,
-      rwtVaultPda,
-      dexConfigPda,
-      ydDistributionConfigPda,
-      expected: expectedMap(),
-    });
+    const out = await checkAuthorities(ctx, defaultArgs());
     expect(out.ok).toBe(true);
     if (out.ok) {
       expect(out.value).toHaveLength(5);
       const failed = out.value.find((r) => r.contract === 'ot_governance');
       expect(failed?.match).toBe(false);
-      expect(failed?.actual).toContain('<fetch_error');
+      expect(failed?.outcome).toBe('rpc_error');
+      expect(failed?.actual).toContain('<rpc_error');
       expect(failed?.actual).toContain('rpc_blackhole');
       // The other 4 contracts still report a real authority and match.
       const ok = out.value.filter((r) => r.contract !== 'ot_governance');
       for (const r of ok) {
         expect(r.match).toBe(true);
+        expect(r.outcome).toBe('match');
       }
     }
   });
 
-  it('reports account_missing when getAccountInfo returns null', async () => {
+  it('reports outcome=account_not_found when getAccountInfo returns null', async () => {
     const { ctx } = makeConnection({
-      getAccountInfo: async (pda: PublicKey) => {
-        if (pda.equals(otGovernancePda)) return null;
-        if (pda.equals(futarchyConfigPda)) return { data: buildFutarchyConfigBuffer(expectedAuthority), owner: futarchyConfigPda };
-        if (pda.equals(rwtVaultPda)) return { data: buildRwtVaultBuffer({ totalRwtSupply: 0n, navBookValue: 0n, authority: expectedAuthority, mint: rwtMint }), owner: rwtVaultPda };
-        if (pda.equals(dexConfigPda)) return { data: buildDexConfigBuffer(expectedAuthority), owner: dexConfigPda };
-        if (pda.equals(ydDistributionConfigPda)) return { data: buildDistributionConfigBuffer(expectedAuthority), owner: ydDistributionConfigPda };
-        return null;
-      },
+      getAccountInfo: makeHappyFetcher({
+        ot_governance: () => null,
+      }),
     });
-    const out = await checkAuthorities(ctx, {
-      otGovernancePda,
-      futarchyConfigPda,
-      rwtVaultPda,
-      dexConfigPda,
-      ydDistributionConfigPda,
-      expected: expectedMap(),
-    });
+    const out = await checkAuthorities(ctx, defaultArgs());
     expect(out.ok).toBe(true);
     if (out.ok) {
       const missing = out.value.find((r) => r.contract === 'ot_governance');
       expect(missing?.match).toBe(false);
-      expect(missing?.actual).toBe('<account_missing>');
+      expect(missing?.outcome).toBe('account_not_found');
+      expect(missing?.actual).toBe('<account_not_found>');
     }
+  });
+
+  // I2 — defense-in-depth: account exists at PDA but is owned by a foreign
+  // program. SDK discriminator validation might still pass on a colliding
+  // 8-byte prefix; explicit owner check catches account substitution.
+  it('reports outcome=wrong_owner when account exists but is owned by a foreign program', async () => {
+    const foreignProgram = new PublicKey(
+      'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA',
+    );
+    const { ctx } = makeConnection({
+      getAccountInfo: makeHappyFetcher({
+        dex_config: () => ({
+          // Bytes still decode as a valid DexConfig, but the owner is wrong.
+          data: buildDexConfigBuffer(expectedAuthority),
+          owner: foreignProgram,
+        }),
+      }),
+    });
+    const out = await checkAuthorities(ctx, defaultArgs());
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      const wrong = out.value.find((r) => r.contract === 'dex_config');
+      expect(wrong?.match).toBe(false);
+      expect(wrong?.outcome).toBe('wrong_owner');
+      expect(wrong?.actual).toContain('<wrong_owner');
+      expect(wrong?.actual).toContain(foreignProgram.toBase58());
+      // The other 4 contracts still match cleanly.
+      const ok = out.value.filter((r) => r.contract !== 'dex_config');
+      for (const r of ok) {
+        expect(r.match).toBe(true);
+        expect(r.outcome).toBe('match');
+      }
+    }
+  });
+
+  // M1+W1 — decode error path. Owner is correct but bytes are malformed
+  // (e.g., truncated buffer or wrong discriminator). Must surface as
+  // outcome=decode_error → metric=0 (drift), NOT rpc_error → metric=-1.
+  it('reports outcome=decode_error when account is owner-correct but bytes are malformed', async () => {
+    // Build a buffer that is too short to satisfy the SDK's account layout.
+    // The SDK's discriminator check or struct decoder will throw.
+    const malformed = Buffer.alloc(4); // way under any account size
+    const { ctx } = makeConnection({
+      getAccountInfo: makeHappyFetcher({
+        futarchy_config: () => ({
+          data: malformed,
+          owner: FUTARCHY_PROGRAM_ID,
+        }),
+      }),
+    });
+    const out = await checkAuthorities(ctx, defaultArgs());
+    expect(out.ok).toBe(true);
+    if (out.ok) {
+      const failed = out.value.find((r) => r.contract === 'futarchy_config');
+      expect(failed?.match).toBe(false);
+      expect(failed?.outcome).toBe('decode_error');
+      expect(failed?.actual).toContain('<decode_error');
+    }
+  });
+});
+
+// ---------- Tests: authorityOutcomeToMetricValue (M1+W1 mapping contract) ----------
+
+describe('authorityOutcomeToMetricValue', () => {
+  it('maps match → 1', () => {
+    expect(authorityOutcomeToMetricValue('match')).toBe(1);
+  });
+
+  it('maps drift, decode_error, account_not_found, wrong_owner → 0 (must fire AuthorityDrift)', () => {
+    expect(authorityOutcomeToMetricValue('drift')).toBe(0);
+    expect(authorityOutcomeToMetricValue('decode_error')).toBe(0);
+    expect(authorityOutcomeToMetricValue('account_not_found')).toBe(0);
+    expect(authorityOutcomeToMetricValue('wrong_owner')).toBe(0);
+  });
+
+  it('maps rpc_error → -1 (must NOT fire AuthorityDrift)', () => {
+    expect(authorityOutcomeToMetricValue('rpc_error')).toBe(-1);
   });
 });
 
@@ -443,7 +572,7 @@ describe('checkRwtSupply', () => {
       mint: rwtMint,
     });
     const { ctx } = makeConnection({
-      getAccountInfo: async () => ({ data: vaultBuf, owner: rwtVaultPda }),
+      getAccountInfo: async () => ({ data: vaultBuf, owner: RWT_ENGINE_PROGRAM_ID }),
       getTokenSupply: async () => ({
         value: { amount: '1000000', decimals: 6, uiAmount: 1, uiAmountString: '1' },
       }),
@@ -465,7 +594,7 @@ describe('checkRwtSupply', () => {
       mint: rwtMint,
     });
     const { ctx } = makeConnection({
-      getAccountInfo: async () => ({ data: vaultBuf, owner: rwtVaultPda }),
+      getAccountInfo: async () => ({ data: vaultBuf, owner: RWT_ENGINE_PROGRAM_ID }),
       getTokenSupply: async () => ({
         value: { amount: '1500000', decimals: 6, uiAmount: 1.5, uiAmountString: '1.5' },
       }),
@@ -483,7 +612,7 @@ describe('checkRwtSupply', () => {
       mint: rwtMint,
     });
     const { ctx } = makeConnection({
-      getAccountInfo: async () => ({ data: vaultBuf, owner: rwtVaultPda }),
+      getAccountInfo: async () => ({ data: vaultBuf, owner: RWT_ENGINE_PROGRAM_ID }),
       getTokenSupply: async () => ({
         value: { amount: '500000', decimals: 6, uiAmount: 0.5, uiAmountString: '0.5' },
       }),
@@ -501,6 +630,7 @@ describe('checkRwtSupply', () => {
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.error).toMatch(/vault_account_missing/);
   });
+
 });
 
 // ---------- Sanity: discriminator round-trip ----------

@@ -21,6 +21,13 @@ import { parseOtGovernance } from '@areal/sdk/ownership-token';
 import { parseDexConfig } from '@areal/sdk/native-dex';
 import { parseFutarchyConfig } from '@areal/sdk/futarchy';
 import { parseDistributionConfig } from '@areal/sdk/yield-distribution';
+import {
+  OWNERSHIP_TOKEN_PROGRAM_ID,
+  FUTARCHY_PROGRAM_ID,
+  RWT_ENGINE_PROGRAM_ID,
+  NATIVE_DEX_PROGRAM_ID,
+  YIELD_DISTRIBUTION_PROGRAM_ID,
+} from '@areal/sdk';
 
 // ---------- Result types ----------
 
@@ -58,11 +65,68 @@ export const CONTRACT_NAMES: readonly ContractName[] = [
   'yd_distribution_config',
 ] as const;
 
+/**
+ * Authority check outcome per contract.
+ *
+ * Outcome semantics (used by index.ts to set the
+ * `chain_invariant_authority_match` gauge):
+ *
+ *   - `match`            — actual authority equals expected → metric=1
+ *   - `drift`            — successful read, authority differs → metric=0
+ *                          (real on-chain authority change — fires AuthorityDrift)
+ *   - `decode_error`     — account read OK, but bytes are malformed (wrong
+ *                          discriminator, etc.) → metric=0
+ *                          (treated as drift: account at this PDA is no longer
+ *                          the expected config struct → substitution attempt
+ *                          or program upgrade with breaking layout change)
+ *   - `account_not_found`— `getAccountInfo` returned null at the expected PDA
+ *                          → metric=0 (the config simply isn't there anymore;
+ *                          treat as drift, NOT unknown)
+ *   - `wrong_owner`      — account exists but is owned by a different program
+ *                          than expected → metric=0
+ *                          (account substitution: someone closed our PDA and
+ *                          another program created an account at the same
+ *                          address — defense-in-depth on top of discriminator)
+ *   - `rpc_error`        — network/RPC failure (timeout, connection refused,
+ *                          response parse error) → metric=-1
+ *                          (transient infrastructure issue — do NOT treat as
+ *                          drift; the meta-alert ChainInvariantsCheckFailing
+ *                          fires after 5m of repeated failure)
+ *
+ * Note on the alert design: `chain_invariant_authority_match == 0` (drift)
+ * MUST fire on any of `drift | decode_error | account_not_found | wrong_owner`,
+ * but MUST NOT fire on `rpc_error`. That is why `rpc_error` is the only
+ * outcome that maps to `-1` (`unable_to_fetch`).
+ */
+export type AuthorityOutcome =
+  | 'match'
+  | 'drift'
+  | 'decode_error'
+  | 'account_not_found'
+  | 'wrong_owner'
+  | 'rpc_error';
+
 export interface AuthorityCheckResult {
   contract: ContractName;
   expected: string;
   actual: string;
   match: boolean;
+  outcome: AuthorityOutcome;
+}
+
+/** Map an outcome to the gauge value documented above. */
+export function authorityOutcomeToMetricValue(outcome: AuthorityOutcome): number {
+  switch (outcome) {
+    case 'match':
+      return 1;
+    case 'drift':
+    case 'decode_error':
+    case 'account_not_found':
+    case 'wrong_owner':
+      return 0;
+    case 'rpc_error':
+      return -1;
+  }
 }
 
 export interface RwtSupplyResult {
@@ -210,8 +274,19 @@ export interface CheckAuthoritiesArgs {
  * Read the `authority` field on each of the 5 contract config PDAs and
  * compare against the operator-supplied expected pubkey. Always returns
  * results for ALL 5 contracts, even if some fetches fail — partial
- * failures produce `{ match: false, actual: '<fetch_error>' }` so the
- * unknown-state is visible in the metric (-1) rather than silenced.
+ * failures surface per-contract via `outcome`.
+ *
+ * Per-contract outcomes (see `AuthorityOutcome` for full semantics):
+ *   - rpc_error          → metric=-1 (transient infra failure)
+ *   - account_not_found  → metric=0  (account literally missing — drift)
+ *   - wrong_owner        → metric=0  (defense-in-depth: explicit owner check
+ *                                     on top of the SDK's discriminator
+ *                                     validation; catches account
+ *                                     substitution where another program
+ *                                     squatted the PDA address)
+ *   - decode_error       → metric=0  (malformed bytes — treat as drift)
+ *   - drift              → metric=0  (authority differs from expected)
+ *   - match              → metric=1  (steady state)
  */
 export async function checkAuthorities(
   ctx: CheckContext,
@@ -227,31 +302,37 @@ export async function checkAuthorities(
   const targets: Array<{
     name: ContractName;
     pda: PublicKey;
+    expectedOwner: PublicKey;
     decode: (data: Buffer | Uint8Array) => { authority: unknown };
   }> = [
     {
       name: 'ot_governance',
       pda: args.otGovernancePda,
+      expectedOwner: OWNERSHIP_TOKEN_PROGRAM_ID,
       decode: (data) => parseOtGovernance(data),
     },
     {
       name: 'futarchy_config',
       pda: args.futarchyConfigPda,
+      expectedOwner: FUTARCHY_PROGRAM_ID,
       decode: (data) => parseFutarchyConfig(data),
     },
     {
       name: 'rwt_vault',
       pda: args.rwtVaultPda,
+      expectedOwner: RWT_ENGINE_PROGRAM_ID,
       decode: (data) => parseRwtVault(data),
     },
     {
       name: 'dex_config',
       pda: args.dexConfigPda,
+      expectedOwner: NATIVE_DEX_PROGRAM_ID,
       decode: (data) => parseDexConfig(data),
     },
     {
       name: 'yd_distribution_config',
       pda: args.ydDistributionConfigPda,
+      expectedOwner: YIELD_DISTRIBUTION_PROGRAM_ID,
       decode: (data) => parseDistributionConfig(data),
     },
   ];
@@ -259,33 +340,89 @@ export async function checkAuthorities(
   const results: AuthorityCheckResult[] = [];
   for (const t of targets) {
     const expected = args.expected[t.name];
+    let info: Awaited<ReturnType<typeof ctx.connection.getAccountInfo>>;
     try {
-      const info = await ctx.connection.getAccountInfo(t.pda);
-      if (!info) {
-        results.push({
-          contract: t.name,
-          expected: expected.toBase58(),
-          actual: '<account_missing>',
-          match: false,
-        });
-        continue;
-      }
-      const decoded = t.decode(info.data);
-      const actualPk = toPublicKey(decoded.authority);
-      results.push({
-        contract: t.name,
-        expected: expected.toBase58(),
-        actual: actualPk.toBase58(),
-        match: actualPk.equals(expected),
-      });
+      info = await ctx.connection.getAccountInfo(t.pda);
     } catch (err) {
+      // Network/RPC failure: timeout, ECONNREFUSED, malformed JSON-RPC.
+      // This is transient infra — distinct from "the account is gone".
       results.push({
         contract: t.name,
         expected: expected.toBase58(),
-        actual: `<fetch_error:${errMessage(err)}>`,
+        actual: `<rpc_error:${errMessage(err)}>`,
         match: false,
+        outcome: 'rpc_error',
       });
+      continue;
     }
+    if (!info) {
+      // Successful RPC, account simply doesn't exist at this PDA. The
+      // operator pinned a PDA that's not on chain — treat as drift.
+      results.push({
+        contract: t.name,
+        expected: expected.toBase58(),
+        actual: '<account_not_found>',
+        match: false,
+        outcome: 'account_not_found',
+      });
+      continue;
+    }
+    // Defense-in-depth (I2): explicit owner check before decoding. The
+    // SDK's discriminator validation in parseXxx provides one layer; if
+    // an attacker (or a misconfigured operator) pinned a PDA owned by a
+    // foreign program that happens to have a colliding 8-byte
+    // discriminator, the owner check catches it. Owner mismatch is
+    // STRUCTURAL fraud, NOT a transient error.
+    if (!info.owner.equals(t.expectedOwner)) {
+      results.push({
+        contract: t.name,
+        expected: expected.toBase58(),
+        actual: `<wrong_owner:${info.owner.toBase58()}>`,
+        match: false,
+        outcome: 'wrong_owner',
+      });
+      continue;
+    }
+    let decoded: { authority: unknown };
+    try {
+      decoded = t.decode(info.data);
+    } catch (err) {
+      // Owner OK but the bytes don't decode (wrong discriminator,
+      // truncated buffer, layout drift after a contract upgrade we
+      // missed). Treat as drift, not rpc_error — RPC delivered the
+      // bytes; the data itself is malformed.
+      results.push({
+        contract: t.name,
+        expected: expected.toBase58(),
+        actual: `<decode_error:${errMessage(err)}>`,
+        match: false,
+        outcome: 'decode_error',
+      });
+      continue;
+    }
+    let actualPk: PublicKey;
+    try {
+      actualPk = toPublicKey(decoded.authority);
+    } catch (err) {
+      // The decoder returned something we can't coerce into PublicKey —
+      // same class of failure as decode_error.
+      results.push({
+        contract: t.name,
+        expected: expected.toBase58(),
+        actual: `<decode_error:${errMessage(err)}>`,
+        match: false,
+        outcome: 'decode_error',
+      });
+      continue;
+    }
+    const matches = actualPk.equals(expected);
+    results.push({
+      contract: t.name,
+      expected: expected.toBase58(),
+      actual: actualPk.toBase58(),
+      match: matches,
+      outcome: matches ? 'match' : 'drift',
+    });
   }
   return { ok: true, value: results };
 }
