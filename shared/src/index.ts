@@ -57,6 +57,10 @@ export type {
   KmsProvider,
 } from './metrics.js';
 
+// Phase 21: classifyError — pure taxonomy folder mapping web3.js / RPC
+// failures to the 5-value `result` label union.
+export { classifyError } from './error-classify.js';
+
 // SD-31 (Layer 10 closure): zero-authority-audit shared helper. Single
 // source of truth for the post-Phase-7 cross-contract assertion + the
 // dual deployer-zero-authority precheck. Replaces the earlier .cts
