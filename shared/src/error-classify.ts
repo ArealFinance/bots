@@ -59,6 +59,12 @@ const SIM_PATTERNS: readonly RegExp[] = [
  * Walk a chain of `error.cause` values, collecting names, messages and
  * `logs` arrays into a single search corpus. Bounded to 10 levels so a
  * pathological self-referential cause cannot loop forever.
+ *
+ * SECURITY (Phase 21.5 INFO 9a): only string-typed `message` and `logs[i]`
+ * entries are appended to the corpus. The previous implementation called
+ * `String(...)` blindly which would invoke a hostile `toString()` on a
+ * crafted object and let it influence classification — a low-impact but
+ * easily eliminated vector. Non-strings are treated as empty.
  */
 function collectErrorText(err: unknown): { name: string; text: string } {
   let name = '';
@@ -68,10 +74,12 @@ function collectErrorText(err: unknown): { name: string; text: string } {
   for (let i = 0; i < 10 && cur != null && !seen.has(cur); i++) {
     seen.add(cur);
     const e = cur as SolanaErrorLike;
-    if (!name && e.name) name = e.name;
-    if (e.message) parts.push(String(e.message));
+    if (!name && typeof e.name === 'string') name = e.name;
+    if (typeof e.message === 'string') parts.push(e.message);
     if (Array.isArray(e.logs)) {
-      for (const ln of e.logs as unknown[]) parts.push(String(ln));
+      for (const ln of e.logs as unknown[]) {
+        if (typeof ln === 'string') parts.push(ln);
+      }
     }
     cur = e.cause;
   }

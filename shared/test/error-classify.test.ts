@@ -150,4 +150,39 @@ describe('classifyError', () => {
     });
     expect(classifyError(err)).toBe('onchain_error');
   });
+
+  // Phase 21.5 INFO 9a: classifier must not invoke `toString()` on non-string
+  // message/log entries. Hostile objects in those slots are treated as empty.
+  it('non-string message with hostile toString() is ignored', () => {
+    // The toString() returns "Program log: AnchorError" — a string that, if
+    // it reached the corpus, would force onchain_error classification.
+    // After the typeof guard the slot is treated as empty and the classifier
+    // falls through to the rpc_error default.
+    const hostileMessage = {
+      toString: () => 'Program log: AnchorError. Error Code: Hijack',
+    };
+    const err = { name: 'WeirdError', message: hostileMessage };
+    expect(classifyError(err)).toBe('rpc_error');
+  });
+
+  it('non-string log entry with hostile toString() is ignored', () => {
+    const hostileLog = {
+      toString: () => 'Program log: AnchorError. Error Code: Hijack',
+    };
+    const err = { name: 'SendTransactionError', logs: [hostileLog] };
+    // SendTransactionError name pushes us into rpc_error (rule 5), and the
+    // hostile log entry must NOT escalate that to onchain_error.
+    expect(classifyError(err)).toBe('rpc_error');
+  });
+
+  it('non-string name is ignored', () => {
+    // A weird `name` field that isn't a string must not be treated as
+    // SendTransactionError or as the blockhash-expired marker.
+    const err = {
+      name: { toString: () => 'TransactionExpiredBlockheightExceededError' },
+      message: 'totally fine',
+    };
+    // Without a real string name match, defaults to rpc_error.
+    expect(classifyError(err)).toBe('rpc_error');
+  });
 });
