@@ -339,12 +339,32 @@ function decodeProgramDataLine(
   programId: PublicKey,
 ): FundEvent | null {
   if (!line.startsWith('Program data: ')) return null;
-  const b64 = line.slice('Program data: '.length);
-  const bytes = Buffer.from(b64, 'base64');
-  if (bytes.length < 8) return null;
 
-  const disc = bytes.subarray(0, 8);
-  const body = bytes.subarray(8);
+  // arlex-lang's `emit!` macro writes the discriminator and event body as
+  // TWO base64 values separated by a single space:
+  //   Program data: <disc_b64> <body_b64>
+  // Anchor's convention is the slightly older single-concatenated-blob
+  // form (no space). `Buffer.from(<str with space>, 'base64')` silently
+  // truncates / produces junk, so the discriminator check below would
+  // never match and every event would be skipped — which is exactly what
+  // happened on the Areal test-validator deployment.
+  //
+  // Support both: if the payload contains a space, split and parse each
+  // half independently; otherwise fall back to the legacy concat layout.
+  const payload = line.slice('Program data: '.length);
+  let disc: Buffer;
+  let body: Buffer;
+  const spaceIdx = payload.indexOf(' ');
+  if (spaceIdx >= 0) {
+    disc = Buffer.from(payload.slice(0, spaceIdx), 'base64');
+    body = Buffer.from(payload.slice(spaceIdx + 1), 'base64');
+    if (disc.length !== 8) return null;
+  } else {
+    const bytes = Buffer.from(payload, 'base64');
+    if (bytes.length < 8) return null;
+    disc = bytes.subarray(0, 8);
+    body = bytes.subarray(8);
+  }
 
   if (disc.equals(DISC_DISTRIBUTOR_FUNDED)) {
     const parsed = parseFundEventBody(body);
