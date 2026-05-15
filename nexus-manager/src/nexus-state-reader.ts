@@ -174,6 +174,12 @@ export function parsePoolStateInfo(data: Buffer, pool: PublicKey): PoolStateInfo
     reserveB: raw.reserveB,
     totalLpShares: raw.totalLpShares,
     isActive: raw.isActive,
+    // Fee-on-top compliance (docs/contracts/native-dex.mdx:522-568) — the
+    // decision engine needs both `fee_bps` and `has_ot_treasury` to size
+    // `amount_in` so that the Nexus ATA reserves fee headroom for the
+    // sell-RWT inbound vault debit (`amount_in + fee_total + ot_treasury_fee`).
+    feeBps: raw.feeBps,
+    hasOtTreasury: raw.hasOtTreasury,
     cumulativeFeesPerShareA: raw.cumulativeFeesPerShareA,
     cumulativeFesPerShareB: raw.cumulativeFeesPerShareB,
   };

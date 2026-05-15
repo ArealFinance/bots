@@ -56,6 +56,56 @@ export interface ManagerStrategyConfig {
 const BPS_DENOMINATOR = 10_000n;
 
 /**
+ * Mirrors `OT_TREASURY_FEE_BPS` in `contracts/native-dex/src/constants.rs:6`.
+ * Added on top of `pool.fee_bps` for governance pools (`has_ot_treasury == true`)
+ * when sizing fee headroom on sell-RWT swaps.
+ */
+const OT_TREASURY_FEE_BPS = 50n;
+
+/**
+ * Fee-on-top sizing (docs/contracts/native-dex.mdx:522-568,
+ * native-dex/src/instructions/swap.rs:205-301).
+ *
+ * On the sell-RWT branch (`input_is_rwt == true`), the inbound transfer
+ * initiated by `swap_internal` debits the user's input ATA by
+ *   `amount_in + fee_total + ot_treasury_fee`
+ * (a.k.a. `user_total_debit`). The bot owns the Nexus-side ATA, so it
+ * MUST reserve fee headroom when sizing `amount_in` — otherwise the
+ * inbound SPL Transfer reverts with `InsufficientFunds` and the cycle is
+ * wasted.
+ *
+ * Given a raw "naive" amount (e.g. `halfDrift`) and the pool's effective
+ * fee bps (`pool.fee_bps` + 50 bps OT surcharge when applicable), this
+ * computes the largest `amount_in` that fits the available balance:
+ *
+ *   amount_in_max = floor(balance * 10_000 / (10_000 + fee_bps + ot_bps))
+ *
+ * The result is bounded above by `naive` (we never increase the bot's
+ * proposed swap size — fee headroom only shrinks it). Returns 0n if the
+ * balance is too small to cover any swap with fees.
+ *
+ * On the buy-RWT branch (`input_is_rwt == false`), fees come out of the
+ * gross output (not from `amount_in`), so headroom is NOT required and
+ * the caller passes the naive amount unchanged.
+ */
+function sizeAmountInForFeeOnTop(args: {
+  naive: bigint;
+  balance: bigint;
+  feeBps: number;
+  hasOtTreasury: boolean;
+}): bigint {
+  const { naive, balance, feeBps, hasOtTreasury } = args;
+  const effectiveFeeBps = BigInt(feeBps) + (hasOtTreasury ? OT_TREASURY_FEE_BPS : 0n);
+  // amount_in_max = floor(balance * 10000 / (10000 + effectiveFeeBps))
+  const denom = BPS_DENOMINATOR + effectiveFeeBps;
+  if (denom === 0n) return 0n;
+  const cap = (balance * BPS_DENOMINATOR) / denom;
+  // Pick the smaller of (naive proposal, fee-headroom cap). Fee headroom
+  // only ever shrinks the bot's proposed amount.
+  return naive < cap ? naive : cap;
+}
+
+/**
  * Decide the next action.
  *
  * `selectedPoolHint` lets the caller bias deployment to a specific pool
@@ -126,14 +176,43 @@ export function decideRebalance(args: {
     if (halfDrift === 0n) {
       return { kind: 'noop', reason: 'drift_below_min_swap' };
     }
-    const aToB = poolMintIsUsdcOnA(pool, cfg.usdcMint)
+    const usdcOnA = poolMintIsUsdcOnA(pool, cfg.usdcMint);
+    const aToB = usdcOnA
       ? currentBps > targetBps // too much USDC: swap A (USDC) → B (RWT)
       : currentBps < targetBps; // too much RWT: swap A (RWT) ← B (USDC) inverted
-    const minAmountOut = (halfDrift * 95n) / 100n;
+    // Fee-on-top headroom (docs/contracts/native-dex.mdx:522-568,
+    // contracts/native-dex/src/instructions/swap.rs:205-301): on sell-RWT
+    // swaps the Nexus ATA must cover `amount_in + fee_total +
+    // ot_treasury_fee`. Compute the effective max `amount_in` so the
+    // inbound transfer cannot revert with `InsufficientFunds`.
+    //
+    // inputIsRwt mapping:
+    //   usdcOnA=true,  aToB=true  → in=USDC (no headroom).
+    //   usdcOnA=true,  aToB=false → in=RWT  (headroom needed).
+    //   usdcOnA=false, aToB=true  → in=RWT  (headroom needed).
+    //   usdcOnA=false, aToB=false → in=USDC (no headroom).
+    // ≡ inputIsRwt = (usdcOnA !== aToB).
+    const inputIsRwt = usdcOnA !== aToB;
+    let amountIn = halfDrift;
+    if (inputIsRwt) {
+      // Sell-RWT path — clamp `amount_in` to fee headroom against the
+      // current RWT balance. Use the bot's RWT idle balance (not idleSum)
+      // since the inbound transfer only touches the RWT ATA.
+      amountIn = sizeAmountInForFeeOnTop({
+        naive: halfDrift,
+        balance: balances.rwt,
+        feeBps: pool.feeBps,
+        hasOtTreasury: pool.hasOtTreasury,
+      });
+      if (amountIn === 0n) {
+        return { kind: 'noop', reason: 'fee_headroom_below_min_swap' };
+      }
+    }
+    const minAmountOut = (amountIn * 95n) / 100n;
     return {
       kind: 'swap',
       pool: pool.pool,
-      amountIn: halfDrift,
+      amountIn,
       minAmountOut: minAmountOut === 0n ? 1n : minAmountOut,
       aToB,
       reason: `drift_${drift}_bps`,
