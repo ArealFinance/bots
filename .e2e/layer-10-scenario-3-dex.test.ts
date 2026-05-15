@@ -335,8 +335,18 @@ if (!PREFLIGHT.ready) {
    * `constant_product_output`). Rounds DOWN — protocol favored.
    *   amount_out = reserve_out * net_input / (reserve_in + net_input)
    *
-   * `net_input` is amount_in MINUS fee_total MINUS ot_treasury_fee (when the
-   * pool has an OT treasury). The caller computes net_input.
+   * REBASELINE — fee-on-top compliance (docs/contracts/native-dex.mdx:522-568,
+   * native-dex/src/instructions/swap.rs:205-301): post-D29 the FULL `amount_in`
+   * enters the curve for BOTH directions.
+   *
+   *   - sell-RWT (input is RWT): `net_input == amount_in`. Fees are debited
+   *     ON TOP from the user's wallet (`user_total_debit = amount_in + fee_total
+   *     + ot_treasury_fee`) and extracted from the RWT vault by outbound CPIs.
+   *   - buy-RWT (output is RWT): `net_input == amount_in`. Fees are deducted
+   *     from the GROSS output (after the curve), not from `amount_in`.
+   *
+   * Either way, `net_input` passed here equals `amount_in` — the caller no
+   * longer subtracts fees before invoking the curve.
    */
   function expectedSwapOut(
     reserveIn: bigint,
@@ -439,28 +449,57 @@ if (!PREFLIGHT.ready) {
     // (relative to reserve_a) MUST produce a positive output bounded by
     // reserve_b. We don't submit; this is a sanity check that the math is
     // well-defined for the current pool state.
+    //
+    // REBASELINE — fee-on-top compliance (docs/contracts/native-dex.mdx:522-568,
+    // native-dex/src/instructions/swap.rs:205-301): post-D29 the FULL
+    // `amount_in` enters the curve for BOTH directions. On the sell-RWT side,
+    // fees are debited ON TOP from the user's wallet (the curve still sees
+    // `amount_in`). On the buy-RWT side, fees are deducted from the GROSS
+    // output after the curve. Either way the curve's `net_input` argument
+    // equals `amount_in` — the pre-fix `probeIn - fee - otSurcharge` formula
+    // for sell-RWT no longer matches the contract.
+    //
+    // Sanity floor: for sell-RWT we still cross-check that `fee_total +
+    // ot_treasury_fee < probeIn` (otherwise the user would be debited more
+    // than ~2× the swap amount in fees, which the pool's `fee_bps <=
+    // MAX_FEE_BPS=1000` invariant + the constant 50bps OT surcharge already
+    // bound, but we re-assert for explicitness).
     const probeIn = pool!.reserveA / 100n;
     if (probeIn > 0n) {
       const fee = expectedFeeTotal(probeIn, pool!.feeBps);
       const otSurcharge = pool!.hasOtTreasury
         ? expectedFeeTotal(probeIn, 50) // OT_TREASURY_FEE_BPS = 50
         : 0n;
-      const netInput = probeIn - fee - otSurcharge;
-      assert.ok(netInput > 0n, `probe netInput ${netInput} must be > 0`);
+      // Fee-on-top sanity: sum of fees on the RWT side must be a fraction of
+      // probeIn (sell-RWT direction's user_total_debit = probeIn + fee + ot
+      // surcharge — we assert the fees themselves are not pathologically
+      // large). MAX_FEE_BPS=1000 + 50bps OT = 1050bps ⇒ fee+ot < 11% of
+      // probeIn for the largest legal fee config.
+      assert.ok(
+        fee + otSurcharge < probeIn,
+        `probe fee+ot ${fee + otSurcharge} must be << probeIn ${probeIn}`,
+      );
+      // Full amount enters the curve under fee-on-top (both directions).
+      const netInput = probeIn;
       const out = expectedSwapOut(pool!.reserveA, pool!.reserveB, netInput);
       assert.ok(out > 0n, `probe swap out must be > 0 (got ${out})`);
       assert.ok(
         out < pool!.reserveB,
         `probe out ${out} must be < reserve_b ${pool!.reserveB} (drain guard)`,
       );
-      // Reverse direction: probe swap b→a.
+      // Reverse direction: probe swap b→a. Same fee-on-top model — full
+      // amount enters the curve regardless of which side is RWT.
       const probeInB = pool!.reserveB / 100n;
       if (probeInB > 0n) {
         const feeB = expectedFeeTotal(probeInB, pool!.feeBps);
         const otSurchargeB = pool!.hasOtTreasury
           ? expectedFeeTotal(probeInB, 50)
           : 0n;
-        const netInputB = probeInB - feeB - otSurchargeB;
+        assert.ok(
+          feeB + otSurchargeB < probeInB,
+          `reverse probe fee+ot ${feeB + otSurchargeB} must be << probeInB ${probeInB}`,
+        );
+        const netInputB = probeInB;
         const outB = expectedSwapOut(pool!.reserveB, pool!.reserveA, netInputB);
         assert.ok(outB > 0n, `reverse probe out must be > 0 (got ${outB})`);
         assert.ok(
@@ -519,14 +558,21 @@ if (!PREFLIGHT.ready) {
     // resulting LP shares must satisfy: (a) delta_a - x > 0 (some A remains
     // for add_liquidity), (b) swap_out > 0 (B side received), (c) the post-zap
     // pool ratio (reserve_a' / reserve_b') stays close to pre-zap. We probe
-    // 0.1% of reserve_a; the constant-product floor is `out = (probe * (10000
-    // - fee_bps) * reserve_b) / (reserve_a * 10000 + probe * (10000 - fee_bps))`.
+    // 0.1% of reserve_a; the constant-product floor (under fee-on-top) is
+    // `out = (probe * reserve_b) / (reserve_a + probe)` — full probe enters
+    // the curve, fees are external to it (docs/contracts/native-dex.mdx:522-568).
     // Assert that floor produces a NON-trivial positive output (closes the
     // tautology gap from 1st-pass review).
+    //
+    // REBASELINE — pre-D29 this call was `expectedSwapOut(swapHalf,
+    // reserveA, reserveB, feeBps)` (4 args, fourth silently ignored — the
+    // helper only ever took 3). With fee-on-top the call is now positionally
+    // (reserveIn, reserveOut, netInput); we make it explicit by passing
+    // `swapHalf` as netInput.
     const probeZapA = pool!.reserveA / 1000n;
     if (probeZapA > 0n) {
       const swapHalf = probeZapA / 2n; // approximate half-and-half split
-      const swapOut = expectedSwapOut(swapHalf, pool!.reserveA, pool!.reserveB, pool!.feeBps);
+      const swapOut = expectedSwapOut(pool!.reserveA, pool!.reserveB, swapHalf);
       assert.ok(
         swapOut > 0n,
         `zap probe constant-product swap leg must produce positive output (got ${swapOut})`,

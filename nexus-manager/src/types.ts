@@ -71,6 +71,21 @@ export interface PoolStateInfo {
   reserveB: bigint;
   totalLpShares: bigint;
   isActive: boolean;
+  /**
+   * Pool's swap fee in basis points. Decision engine consumes this to
+   * compute fee-on-top headroom on sell-RWT swaps (post-D29: the inbound
+   * vault debit is `amount_in + fee_total + ot_treasury_fee`, so the
+   * manager must reserve fee room from the raw Nexus ATA balance — see
+   * `decision-engine.ts::sizeAmountInForFeeOnTop`).
+   */
+  feeBps: number;
+  /**
+   * Whether the pool charges an additional `OT_TREASURY_FEE_BPS` (50 bps,
+   * `contracts/native-dex/src/constants.rs:6`) on top of the standard fee.
+   * Decision engine adds this to the headroom denominator on sell-RWT
+   * swaps. False on non-governance pools.
+   */
+  hasOtTreasury: boolean;
   cumulativeFeesPerShareA: bigint;
   cumulativeFesPerShareB: bigint;
 }
