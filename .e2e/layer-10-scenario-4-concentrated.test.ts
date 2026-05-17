@@ -72,9 +72,11 @@ import {
 const POOL_TYPE_STANDARD = 0;
 const POOL_TYPE_CONCENTRATED = 1;
 
-/** Monotonic Ladder bin range — see native-dex/src/constants.rs:26.
- * Increased from 70 (old pyramid) to 1000 for cumulative growth model. */
-const MAX_BINS = 1000;
+/** Monotonic Ladder bin range — see native-dex/src/constants.rs:37.
+ * Increased from 70 (old pyramid) to 630. Solana CPI realloc limit caps
+ * single-ix BinArray creation at 10_240 bytes. 630 bins × 16 bytes/bin
+ * fits ~10_131 bytes total. See hotfix 724a652 for details. */
+const MAX_BINS = 630;
 
 /** Active zone width — see native-dex/src/constants.rs:27. */
 const ACTIVE_ZONE_WIDTH = 40;
@@ -138,31 +140,31 @@ const POOL_OFFSET_ACTIVE_ZONE_LOWER = 264;
 const POOL_OFFSET_PERMANENT_TAIL_OFFSET_BPS = 268;
 const POOL_TOTAL_LEN = 272;
 
-/** BinArray — offsets cross-checked against contracts/native-dex/src/state.rs (CP-4).
+/** BinArray — offsets cross-checked against contracts/native-dex/src/state.rs (CP-4 + hotfix 724a652).
  *
- * Monotonic Ladder increases MAX_BINS from 70 to 1000 for cumulative growth model.
+ * Monotonic Ladder increases MAX_BINS from 70 to 630 (constrained by Solana CPI realloc limit).
  * Each Bin is 16 bytes (liquidity_a u64 @ 0, liquidity_b u64 @ 8).
  *
  *   [0..8]      discriminator
  *   [8..40]     pool                  [u8;32]
- *   [40..16040] bins[1000]            Bin[1000] (each 16 bytes)
+ *   [40..10120] bins[630]             Bin[630] (each 16 bytes)
  *                                      liquidity_a u64 LE @ offset 0
  *                                      liquidity_b u64 LE @ offset 8
- *   [16040..16044] lower_bin_id       i32 LE
- *   [16044..16046] bin_step_bps       u16 LE
- *   [16046..16050] active_bin_id      i32 LE
- *   [16050..16051] bump               u8
- * Total SPACE = 8 + 16_043 = 16_051 bytes.
+ *   [10120..10124] lower_bin_id       i32 LE
+ *   [10124..10126] bin_step_bps       u16 LE
+ *   [10126..10130] active_bin_id      i32 LE
+ *   [10130..10131] bump               u8
+ * Total SPACE = 8 + 10_123 = 10_131 bytes.
  */
 const BIN_ARRAY_OFFSET_POOL = 8;
 const BIN_ARRAY_OFFSET_BINS = 40;
 const BIN_ARRAY_BIN_SIZE = 16;
 const BIN_OFFSET_LIQUIDITY_A = 0;
 const BIN_OFFSET_LIQUIDITY_B = 8;
-const BIN_ARRAY_OFFSET_LOWER_BIN_ID = 16040;
-const BIN_ARRAY_OFFSET_BIN_STEP_BPS = 16044;
-const BIN_ARRAY_OFFSET_ACTIVE_BIN_ID = 16046;
-const BIN_ARRAY_TOTAL_LEN = 16051;
+const BIN_ARRAY_OFFSET_LOWER_BIN_ID = 10120;
+const BIN_ARRAY_OFFSET_BIN_STEP_BPS = 10124;
+const BIN_ARRAY_OFFSET_ACTIVE_BIN_ID = 10126;
+const BIN_ARRAY_TOTAL_LEN = 10131;
 
 /** SPL Token Account amount field (offset 64, u64 LE). */
 const TOKEN_ACCOUNT_AMOUNT_OFFSET = 64;
@@ -382,7 +384,7 @@ if (!PREFLIGHT.ready) {
 
   interface BinArrayView {
     pool: PublicKey;
-    bins: BinView[]; // length === MAX_BINS, indexed 0..69
+    bins: BinView[]; // length === MAX_BINS, indexed 0..629
     lowerBinId: number;
     binStepBps: number;
     activeBinId: number;
@@ -471,7 +473,7 @@ if (!PREFLIGHT.ready) {
       'master pool has_ot_treasury must be false — OT routing belongs on ARL_OT/RWT pair',
     );
 
-    // BinArray length gate for 1000-bin layout: 16_051 bytes.
+    // BinArray length gate for 630-bin layout: 10_131 bytes.
     const ba = await readBinArray(masterBinArrayPda);
     assert.ok(ba, 'BinArray account not found');
     assert.ok(
