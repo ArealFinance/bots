@@ -7,14 +7,17 @@
 - **On-chain liveness probe:** verified via `PoolState` account read; the orchestrator dwells past the heartbeat threshold and asserts the spawned PID is still alive before declaring Phase 8 complete.
 - **Heartbeat:** to dashboard System Overview (Layer 10 Substep 9).
 
-Keeps the Areal Native DEX concentrated-liquidity pools active by shifting bin ranges around the current NAV (Net Asset Value) when price drifts outside the active window.
+Keeps the Areal Native DEX Monotonic Ladder pools tracking NAV by extending the active bid wall when NAV rises (`grow_liquidity`) and recentering density when NAV falls (`compress_liquidity`).
 
 ## What it does
 
-1. Fetches current NAV from the RWT Engine vault
-2. Compares against the pool's active bin range
-3. If deviation exceeds `REBALANCE_THRESHOLD` (default 1%), issues a `shift_bins` instruction to re-center liquidity around the new price
-4. Respects a `DEBOUNCE_MS` window between shifts to avoid thrash
+1. Fetches current NAV from the RWT Engine vault.
+2. Compares against `pool.last_rebalance_nav_bin` via float `priceAtBin` math.
+3. If `|deviation| ≥ REBALANCE_THRESHOLD` (default 1%) AND the integer `new_nav_bin` differs from `last_rebalance_nav_bin`:
+   - **`new_nav_bin > last_rebalance_nav_bin`** (NAV rose) — calls `grow_liquidity`, draining USDC from the Liquidity Nexus accumulator to extend the bid wall rightward. If the accumulator is empty, skips the cycle.
+   - **`new_nav_bin < last_rebalance_nav_bin`** (NAV fell after a writedown) — calls `compress_liquidity`, which is capital-neutral and recenters existing pool USDC around the new (lower) NAV. The frozen ask wall above NAV is preserved.
+4. Respects a `DEBOUNCE_MS` window between successful submissions to avoid thrash.
+5. Exponential backoff on CPI failures (`2^n × RETRY_BASE_DELAY_MS`, up to `MAX_RETRIES`).
 
 Runs as a loop with `CHECK_INTERVAL_MS` cadence (default 60 s).
 
@@ -51,12 +54,13 @@ npm run bot:rebalancer
 
 ## Files
 
-- `src/index.ts` — entry point and loop
-- `src/nav-calculator.ts` — reads vault NAV
-- `src/rebalancer.ts` — detects drift, builds and sends `shift_bins` tx
-- `src/config.ts` — env + constants
+- `src/index.ts` — entry point, pool discovery via `parsePoolState`, decision loop
+- `src/nav-calculator.ts` — float `priceAtBin` + `deviation` helpers + `navToBin` (SDK Q-fixed-point mirror)
+- `src/rebalancer.ts` — decision tree, growth / compression paths, exponential backoff
+- `src/config.ts` — env + tunables (`REBALANCE_THRESHOLD`, `ACTIVE_ZONE_WIDTH`, `DEBOUNCE_MS`, retry knobs)
 
 ## Related
 
-- [ArealFinance/contracts](https://github.com/ArealFinance/contracts) — `native-dex` `shift_bins` instruction
+- [ArealFinance/contracts](https://github.com/ArealFinance/contracts) — `native-dex::grow_liquidity` / `compress_liquidity` (CP-7)
+- [ArealFinance/sdk](https://github.com/ArealFinance/sdk) — `buildGrowLiquidityIx` / `buildCompressLiquidityIx` (SDK 0.12.0, CP-8)
 - [ArealFinance/areal](https://github.com/ArealFinance/areal) — full protocol

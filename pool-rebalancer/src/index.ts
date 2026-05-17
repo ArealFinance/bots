@@ -1,20 +1,25 @@
 import { Connection, Keypair, PublicKey } from '@solana/web3.js';
+import {
+  POOLSTATE_DISCRIMINATOR,
+  parsePoolState,
+} from '@areal/sdk/native-dex';
 import { findBinArrayPda, findRwtVaultPda } from '@areal/sdk/pda';
-import { CONFIG } from './config.js';
-import { Rebalancer } from './rebalancer.js';
+import { Buffer } from 'buffer';
 import * as fs from 'fs';
+import { CONFIG } from './config.js';
+import { Rebalancer, type PoolInfo, type RebalanceDecision } from './rebalancer.js';
 
 const POOL_TYPE_CONCENTRATED = 1;
 
-async function main() {
+async function main(): Promise<void> {
   console.log('[pool-rebalancer] Starting...');
   console.log(`[pool-rebalancer] RPC: ${CONFIG.RPC_URL}`);
   console.log(`[pool-rebalancer] DEX Program: ${CONFIG.DEX_PROGRAM_ID}`);
   console.log(`[pool-rebalancer] Check interval: ${CONFIG.CHECK_INTERVAL_MS}ms`);
   console.log(`[pool-rebalancer] Threshold: ${CONFIG.REBALANCE_THRESHOLD * 100}%`);
-  console.log(`[pool-rebalancer] Target bin count: ${CONFIG.TARGET_BIN_COUNT}`);
+  console.log(`[pool-rebalancer] Active zone width: ${CONFIG.ACTIVE_ZONE_WIDTH}`);
+  console.log(`[pool-rebalancer] Debounce: ${CONFIG.DEBOUNCE_MS}ms`);
 
-  // Load rebalancer keypair
   if (!CONFIG.REBALANCER_KEYPAIR) {
     console.error('[pool-rebalancer] REBALANCER_KEYPAIR not set');
     process.exit(1);
@@ -28,113 +33,137 @@ async function main() {
     console.error('[pool-rebalancer] Failed to load keypair:', err);
     process.exit(1);
   }
-
   console.log(`[pool-rebalancer] Rebalancer wallet: ${wallet.publicKey.toBase58()}`);
+
+  if (!CONFIG.RWT_ENGINE_PROGRAM_ID) {
+    console.error('[pool-rebalancer] RWT_ENGINE_PROGRAM_ID not set');
+    process.exit(1);
+  }
 
   const connection = new Connection(CONFIG.RPC_URL, 'confirmed');
   const rebalancer = new Rebalancer(connection, wallet);
   const dexProgramId = new PublicKey(CONFIG.DEX_PROGRAM_ID);
+  const rwtEngineProgramId = new PublicKey(CONFIG.RWT_ENGINE_PROGRAM_ID);
+  const [rwtVaultPda] = findRwtVaultPda(rwtEngineProgramId);
 
-  // Main loop
+  // Main loop — one full iteration per CHECK_INTERVAL_MS.
+  // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
-      // Discover concentrated pools by scanning program accounts
       const pools = await discoverConcentratedPools(connection, dexProgramId);
       console.log(`[pool-rebalancer] Found ${pools.length} concentrated pool(s)`);
 
-      // Derive RWT vault PDA (from RWT Engine program) via SDK helper.
-      const rwtVaultPda = CONFIG.RWT_ENGINE_PROGRAM_ID
-        ? findRwtVaultPda(new PublicKey(CONFIG.RWT_ENGINE_PROGRAM_ID))[0]
-        : null;
-
-      if (!rwtVaultPda) {
-        console.warn('[pool-rebalancer] RWT_ENGINE_PROGRAM_ID not set, skipping rebalance');
-      } else {
-        for (const pool of pools) {
-          try {
-            await rebalancer.checkAndRebalance(pool, rwtVaultPda);
-          } catch (err) {
-            console.error(`[pool-rebalancer] Error checking pool ${pool.address.toBase58()}:`, err);
-          }
+      for (const pool of pools) {
+        try {
+          const decision = await rebalancer.checkAndRebalance(pool, rwtVaultPda);
+          logDecision(pool, decision);
+        } catch (err) {
+          console.error(
+            `[pool-rebalancer] Error checking pool ${pool.address.toBase58()}:`,
+            err,
+          );
         }
       }
     } catch (err) {
       console.error('[pool-rebalancer] Loop error:', err);
     }
 
-    await new Promise(r => setTimeout(r, CONFIG.CHECK_INTERVAL_MS));
+    await new Promise((r) => setTimeout(r, CONFIG.CHECK_INTERVAL_MS));
   }
 }
 
-interface PoolInfo {
-  address: PublicKey;
-  binArrayPda: PublicKey;
-  poolType: number;
-  isActive: boolean;
-  reserveA: bigint;
-  reserveB: bigint;
-  binStepBps: number;
-  activeBinId: number;
+function logDecision(pool: PoolInfo, decision: RebalanceDecision): void {
+  const pool58 = pool.address.toBase58();
+  switch (decision.kind) {
+    case 'skip':
+      console.log(
+        `[pool-rebalancer] skip pool=${pool58} reason=${decision.reason}` +
+          (decision.detail ? ` detail=${decision.detail}` : ''),
+      );
+      return;
+    case 'noop':
+      console.log(`[pool-rebalancer] noop pool=${pool58} detail=${decision.detail}`);
+      return;
+    case 'grow_submitted':
+      console.log(
+        `[pool-rebalancer] grow_submitted pool=${pool58} new_nav_bin=${decision.newNavBin} ` +
+          `nexus_balance=${decision.nexusBalance.toString()} sig=${decision.signature}`,
+      );
+      return;
+    case 'compression_submitted':
+      console.log(
+        `[pool-rebalancer] compression_submitted pool=${pool58} new_nav_bin=${decision.newNavBin} ` +
+          `sig=${decision.signature}`,
+      );
+      return;
+    case 'submission_failed':
+      console.error(
+        `[pool-rebalancer] submission_failed pool=${pool58} pathway=${decision.pathway} ` +
+          `new_nav_bin=${decision.newNavBin} error=${decision.error}`,
+      );
+      return;
+  }
 }
 
-async function discoverConcentratedPools(
+/**
+ * Discover concentrated pools via `getProgramAccounts` with a discriminator
+ * memcmp filter. We deliberately do NOT filter by `dataSize` — the
+ * PoolState size has grown twice (D28: +32 bytes for LP-fee accumulators,
+ * CP-1: +20 bytes for Monotonic Ladder anchors), and pinning a byte count
+ * here is a foot-gun. The discriminator alone is unique.
+ *
+ * All field decoding is delegated to the SDK's `parsePoolState` so any
+ * future field reordering is picked up transparently.
+ */
+export async function discoverConcentratedPools(
   connection: Connection,
   programId: PublicKey,
 ): Promise<PoolInfo[]> {
-  // Fetch all program accounts with PoolState discriminator
-  // PoolState discriminator = sha256("account:PoolState")[0..8]
-  const crypto = await import('crypto');
-  const discriminator = crypto.createHash('sha256')
-    .update('account:PoolState')
-    .digest()
-    .subarray(0, 8);
-
   const accounts = await connection.getProgramAccounts(programId, {
     filters: [
-      { dataSize: 220 }, // PoolState SPACE
-      { memcmp: { offset: 0, bytes: Buffer.from(discriminator).toString('base64'), encoding: 'base64' } },
+      {
+        memcmp: {
+          offset: 0,
+          bytes: Buffer.from(POOLSTATE_DISCRIMINATOR).toString('base64'),
+          encoding: 'base64',
+        },
+      },
     ],
   });
 
   const pools: PoolInfo[] = [];
-
   for (const { pubkey, account } of accounts) {
-    const data = account.data;
-    // PoolState layout after 8-byte discriminator:
-    // pool_type: u8 (offset 8)
-    const poolType = data[8];
-    if (poolType !== POOL_TYPE_CONCENTRATED) continue;
+    let state;
+    try {
+      state = parsePoolState(account.data);
+    } catch {
+      // Discriminator matched but the body is malformed — skip rather than
+      // poison the whole cycle.
+      continue;
+    }
+    if (state.poolType !== POOL_TYPE_CONCENTRATED) continue;
 
-    // Parse fields (packed repr):
-    // pool_type(1) + token_a_mint(32) + token_b_mint(32) + vault_a(32) + vault_b(32) +
-    // reserve_a(8) + reserve_b(8) + total_lp_shares(16) + fee_bps(2) + is_active(1) +
-    // total_fees_accumulated(8) + bin_step_bps(2) + active_bin_id(4)
-    const offset = 8; // After discriminator
-    const isActive = data[offset + 1 + 32 + 32 + 32 + 32 + 8 + 8 + 16 + 2] !== 0;
-    const reserveA = data.readBigUInt64LE(offset + 1 + 32 + 32 + 32 + 32);
-    const reserveB = data.readBigUInt64LE(offset + 1 + 32 + 32 + 32 + 32 + 8);
-    const binStepBps = data.readUInt16LE(offset + 1 + 32 + 32 + 32 + 32 + 8 + 8 + 16 + 2 + 1 + 8);
-    const activeBinId = data.readInt32LE(offset + 1 + 32 + 32 + 32 + 32 + 8 + 8 + 16 + 2 + 1 + 8 + 2);
-
-    // Derive BinArray PDA via SDK helper.
     const [binArrayPda] = findBinArrayPda(pubkey, programId);
 
     pools.push({
       address: pubkey,
       binArrayPda,
-      poolType,
-      isActive,
-      reserveA,
-      reserveB,
-      binStepBps,
-      activeBinId,
+      poolType: state.poolType,
+      isActive: state.isActive,
+      reserveA: state.reserveA,
+      reserveB: state.reserveB,
+      binStepBps: state.binStepBps,
+      activeBinId: state.activeBinId,
+      lastRebalanceNavBin: state.lastRebalanceNavBin,
+      vaultB: state.vaultB,
+      tokenBMint: state.tokenBMint,
     });
   }
 
   return pools;
 }
 
-main().catch(err => {
+main().catch((err) => {
   console.error('[pool-rebalancer] Fatal error:', err);
   process.exit(1);
 });
