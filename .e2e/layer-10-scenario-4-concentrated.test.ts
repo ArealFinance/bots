@@ -87,7 +87,7 @@ const MIN_LIQUIDITY = 1_000n;
 /** Master pool concentrated parameters — phaseMasterPool wires these to
  * `create_concentrated_pool` (bootstrap-init.ts:997-1106). */
 const MASTER_POOL_BIN_STEP_BPS = 10;
-const MASTER_POOL_INITIAL_ACTIVE_BIN = 1000; // Monotonic Ladder starts above origin
+const MASTER_POOL_INITIAL_ACTIVE_BIN = 0; // NAV-relative bin 0 at pool creation; bootstrap-init.ts:1216 must stay in sync
 
 /** PoolState — offsets cross-checked against contracts/native-dex/src/state.rs.
  *
