@@ -7,6 +7,7 @@ import {
 } from '@solana/web3.js';
 import { RWTVAULT_DISCRIMINATOR } from '@areal/sdk/rwt-engine';
 import {
+  DEXCONFIG_DISCRIMINATOR,
   POOLSTATE_DISCRIMINATOR,
   parsePoolState,
 } from '@areal/sdk/native-dex';
@@ -22,6 +23,7 @@ import {
 import {
   decodeNavPrice,
   Rebalancer,
+  REBALANCER_KILL_SWITCH,
   type PoolInfo,
   type RpcAdapter,
 } from '../src/rebalancer.js';
@@ -105,6 +107,32 @@ function buildRwtVaultAccount(navRaw: bigint): { data: Buffer } {
   return { data: buf };
 }
 
+/**
+ * Synthesise a DexConfig account buffer. Layout (175 bytes total):
+ *   [8] disc | [32] authority | [32] pending_authority | [1] has_pending |
+ *   [32] pause_authority | [2] base_fee_bps | [2] lp_fee_share_bps |
+ *   [32] areal_fee_destination | [32] rebalancer | [1] is_active | [1] bump
+ *
+ * Only `rebalancer` matters for the CP-12.5 pre-flight path; other fields
+ * are zero-filled (parsing still succeeds — the bot only reads `rebalancer`).
+ */
+function buildDexConfigAccount(rebalancer: PublicKey): { data: Buffer } {
+  const buf = Buffer.alloc(8 + 32 + 32 + 1 + 32 + 2 + 2 + 32 + 32 + 1 + 1);
+  let off = 0;
+  buf.set(DEXCONFIG_DISCRIMINATOR, off); off += 8;
+  off += 32; // authority
+  off += 32; // pending_authority
+  buf.writeUInt8(0, off); off += 1; // has_pending = false
+  off += 32; // pause_authority
+  buf.writeUInt16LE(30, off); off += 2;
+  buf.writeUInt16LE(8000, off); off += 2;
+  off += 32; // areal_fee_destination
+  rebalancer.toBuffer().copy(buf, off); off += 32;
+  buf.writeUInt8(1, off); off += 1; // is_active = true
+  buf.writeUInt8(255, off); // bump
+  return { data: buf };
+}
+
 interface FakeRpcOptions {
   vaultNavRaw: bigint | null; // null = vault not found
   nexusUsdcBalance: bigint | 'throw';
@@ -112,6 +140,14 @@ interface FakeRpcOptions {
   failTx?: Error;
   /** Override the returned signature (defaults to deterministic "sig-N"). */
   signature?: string;
+  /**
+   * Rebalancer pubkey to write into the synthesised DexConfig account.
+   * Defaults to the test wallet's public key so the pre-flight passes
+   * unless a test explicitly opts into a kill-switch / mismatch scenario.
+   * Pass `null` to make `getAccountInfo` return null for DexConfig (tests
+   * the `dex_config_unreadable` skip branch).
+   */
+  dexConfigRebalancer?: PublicKey | null;
 }
 
 function buildFakeRpc(opts: FakeRpcOptions): {
@@ -122,11 +158,25 @@ function buildFakeRpc(opts: FakeRpcOptions): {
   let attempts = 0;
   let lastTx: Transaction | null = null;
 
+  // Default the DexConfig.rebalancer slot to a non-zero, non-matching key
+  // when the caller doesn't provide one. Tests that exercise grow/compress
+  // submission paths must pass `dexConfigRebalancer: wallet.publicKey` to
+  // pass the pre-flight. Tests that don't reach the pre-flight (skip
+  // before submit) can leave it unset.
+  const dexConfigRebalancer =
+    opts.dexConfigRebalancer === undefined
+      ? PublicKey.unique()
+      : opts.dexConfigRebalancer;
+
   const rpc: RpcAdapter = {
     async getAccountInfo(pubkey) {
       if (pubkey.equals(RWT_VAULT_PDA)) {
         if (opts.vaultNavRaw === null) return null;
         return buildRwtVaultAccount(opts.vaultNavRaw);
+      }
+      if (pubkey.equals(DEX_CONFIG_PDA)) {
+        if (dexConfigRebalancer === null) return null;
+        return buildDexConfigAccount(dexConfigRebalancer);
       }
       return null;
     },
@@ -210,6 +260,7 @@ describe('Rebalancer decision tree (CP-9)', () => {
     const { rpc, txAttempts } = buildFakeRpc({
       vaultNavRaw: 1_050_000n,
       nexusUsdcBalance: 0n,
+      dexConfigRebalancer: wallet.publicKey,
     });
     const r = new Rebalancer(rpc, wallet, { dexProgramId: DEX_PROGRAM_ID });
     const pool = makePool({ lastRebalanceNavBin: 0, binStepBps: 10 });
@@ -223,6 +274,7 @@ describe('Rebalancer decision tree (CP-9)', () => {
     const { rpc, txAttempts } = buildFakeRpc({
       vaultNavRaw: 1_050_000n,
       nexusUsdcBalance: 'throw',
+      dexConfigRebalancer: wallet.publicKey,
     });
     const r = new Rebalancer(rpc, wallet, { dexProgramId: DEX_PROGRAM_ID });
     const pool = makePool({ lastRebalanceNavBin: 0, binStepBps: 10 });
@@ -237,6 +289,7 @@ describe('Rebalancer decision tree (CP-9)', () => {
       vaultNavRaw: 1_050_000n, // 1.05
       nexusUsdcBalance: 10_000_000n,
       signature: 'grow-sig-1',
+      dexConfigRebalancer: wallet.publicKey,
     });
     const r = new Rebalancer(rpc, wallet, { dexProgramId: DEX_PROGRAM_ID });
     const pool = makePool({ lastRebalanceNavBin: 0, binStepBps: 10 });
@@ -275,6 +328,7 @@ describe('Rebalancer decision tree (CP-9)', () => {
       vaultNavRaw: 900_000n,
       nexusUsdcBalance: 0n, // irrelevant for compress
       signature: 'compress-sig-1',
+      dexConfigRebalancer: wallet.publicKey,
     });
     const r = new Rebalancer(rpc, wallet, { dexProgramId: DEX_PROGRAM_ID });
     const pool = makePool({ lastRebalanceNavBin: 100, binStepBps: 10 });
@@ -300,6 +354,7 @@ describe('Rebalancer decision tree (CP-9)', () => {
     const { rpc, txAttempts } = buildFakeRpc({
       vaultNavRaw: 1_050_000n,
       nexusUsdcBalance: 10_000_000n,
+      dexConfigRebalancer: wallet.publicKey,
     });
     const r = new Rebalancer(rpc, wallet, { dexProgramId: DEX_PROGRAM_ID });
     const pool = makePool({ lastRebalanceNavBin: 0, binStepBps: 10 });
@@ -319,6 +374,7 @@ describe('Rebalancer decision tree (CP-9)', () => {
       vaultNavRaw: 1_050_000n,
       nexusUsdcBalance: 10_000_000n,
       failTx: new Error('simulated CPI failure'),
+      dexConfigRebalancer: wallet.publicKey,
     });
     // Shrink the backoff so the test doesn't sleep 75+ seconds.
     const originalBase = CONFIG.RETRY_BASE_DELAY_MS;
@@ -404,5 +460,148 @@ describe('parsePoolState wiring', () => {
     // Cross-check that the SDK helper is callable. Actual byte-layout
     // pinning lives in the SDK's own test suite.
     expect(typeof parsePoolState).toBe('function');
+  });
+});
+
+// ────────────────── CP-12.5: kill-switch pre-flight ──────────────────────
+
+describe('Rebalancer CP-12.5 pre-flight', () => {
+  const wallet = Keypair.generate();
+
+  it('REBALANCER_KILL_SWITCH constant is the [0u8;32] sentinel', () => {
+    // Mirrors `contracts/native-dex/src/constants.rs`. If the SDK ships
+    // its own export later, this assertion still holds — both are `[0;32]`.
+    const bytes = REBALANCER_KILL_SWITCH.toBuffer();
+    expect(bytes.length).toBe(32);
+    expect(bytes.every((b) => b === 0)).toBe(true);
+  });
+
+  it('short-circuits with skip-kill-switch when DexConfig.rebalancer = [0u8;32]', async () => {
+    // NAV and Nexus are set up such that we'd otherwise submit a grow tx.
+    // The kill-switch must intercept before submission so no tx goes out
+    // (otherwise the chain would revert with `InvalidRebalancer` and we'd
+    // burn fees + emit alert-worthy errors).
+    const { rpc, txAttempts } = buildFakeRpc({
+      vaultNavRaw: 1_050_000n,
+      nexusUsdcBalance: 10_000_000n,
+      dexConfigRebalancer: REBALANCER_KILL_SWITCH,
+    });
+    const r = new Rebalancer(rpc, wallet, { dexProgramId: DEX_PROGRAM_ID });
+    const pool = makePool({ lastRebalanceNavBin: 0, binStepBps: 10 });
+    const decision = await r.checkAndRebalance(pool, RWT_VAULT_PDA);
+    expect(decision.kind).toBe('skip-kill-switch');
+    expect(txAttempts()).toBe(0);
+  });
+
+  it('short-circuits with skip-wrong-signer when DexConfig.rebalancer is a different key', async () => {
+    const rotated = Keypair.generate().publicKey;
+    const { rpc, txAttempts } = buildFakeRpc({
+      vaultNavRaw: 1_050_000n,
+      nexusUsdcBalance: 10_000_000n,
+      dexConfigRebalancer: rotated,
+    });
+    const r = new Rebalancer(rpc, wallet, { dexProgramId: DEX_PROGRAM_ID });
+    const pool = makePool({ lastRebalanceNavBin: 0, binStepBps: 10 });
+    const decision = await r.checkAndRebalance(pool, RWT_VAULT_PDA);
+    expect(decision.kind).toBe('skip-wrong-signer');
+    if (decision.kind === 'skip-wrong-signer') {
+      expect(decision.expected).toBe(rotated.toBase58());
+      expect(decision.actual).toBe(wallet.publicKey.toBase58());
+    }
+    expect(txAttempts()).toBe(0);
+  });
+
+  it('skips with dex_config_unreadable when DexConfig account is missing', async () => {
+    const { rpc, txAttempts } = buildFakeRpc({
+      vaultNavRaw: 1_050_000n,
+      nexusUsdcBalance: 10_000_000n,
+      dexConfigRebalancer: null,
+    });
+    const r = new Rebalancer(rpc, wallet, { dexProgramId: DEX_PROGRAM_ID });
+    const pool = makePool({ lastRebalanceNavBin: 0, binStepBps: 10 });
+    const decision = await r.checkAndRebalance(pool, RWT_VAULT_PDA);
+    expect(decision.kind).toBe('skip');
+    if (decision.kind === 'skip') {
+      expect(decision.reason).toBe('dex_config_unreadable');
+    }
+    expect(txAttempts()).toBe(0);
+  });
+
+  it('does NOT fetch DexConfig when an earlier skip fires (saves an RPC)', async () => {
+    // Inactive pool short-circuits step 1 of the decision tree — no NAV
+    // read, no DexConfig read, no tx. Tracked separately because the
+    // pre-flight is placed *after* threshold/noop checks.
+    let dexConfigReads = 0;
+    const rpc: RpcAdapter = {
+      async getAccountInfo(pubkey) {
+        if (pubkey.equals(DEX_CONFIG_PDA)) {
+          dexConfigReads += 1;
+          return null;
+        }
+        return null;
+      },
+      async getTokenAccountBalance(_pubkey) {
+        return { value: { amount: '0' } };
+      },
+      async sendAndConfirm(_tx, _signers) {
+        throw new Error('should not be reached');
+      },
+    };
+    const r = new Rebalancer(rpc, wallet, { dexProgramId: DEX_PROGRAM_ID });
+    const pool = makePool({ isActive: false });
+    const decision = await r.checkAndRebalance(pool, RWT_VAULT_PDA);
+    expect(decision.kind).toBe('skip');
+    expect(dexConfigReads).toBe(0);
+  });
+});
+
+// ───────────── CP-12.5: NavBinMismatch hard reject (no retry) ─────────────
+
+describe('Rebalancer NavBinMismatch handling', () => {
+  const wallet = Keypair.generate();
+
+  /**
+   * Build a simulated NavBinMismatch error. The Solana web3.js
+   * `sendAndConfirmTransaction` path surfaces program errors as
+   * `Error.message` containing hex `0x17b4` (= 6068). The bot's
+   * `isNavBinMismatch` helper matches on the named enum (via
+   * `decodeProgramError`) and on the `0x17b4` substring as a fallback.
+   */
+  function navBinMismatchError(): Error {
+    return new Error(
+      'Transaction simulation failed: Error processing Instruction 0: ' +
+        'custom program error: 0x17b4',
+    );
+  }
+
+  it('does NOT retry on NavBinMismatch — one tx, then hard reject', async () => {
+    // Shrink the backoff so a hypothetical retry would still be fast,
+    // but the test asserts attempts === 1.
+    const originalBase = CONFIG.RETRY_BASE_DELAY_MS;
+    const originalMax = CONFIG.MAX_RETRIES;
+    CONFIG.RETRY_BASE_DELAY_MS = 1;
+    CONFIG.MAX_RETRIES = 5;
+    try {
+      const { rpc, txAttempts } = buildFakeRpc({
+        vaultNavRaw: 1_050_000n,
+        nexusUsdcBalance: 10_000_000n,
+        failTx: navBinMismatchError(),
+        dexConfigRebalancer: wallet.publicKey,
+      });
+      const r = new Rebalancer(rpc, wallet, { dexProgramId: DEX_PROGRAM_ID });
+      const pool = makePool({ lastRebalanceNavBin: 0, binStepBps: 10 });
+      const decision = await r.checkAndRebalance(pool, RWT_VAULT_PDA);
+
+      expect(decision.kind).toBe('submission_failed');
+      if (decision.kind === 'submission_failed') {
+        expect(decision.pathway).toBe('grow');
+        expect(decision.hardReject).toBe(true);
+        expect(decision.error).toContain('0x17b4');
+      }
+      expect(txAttempts()).toBe(1); // No retry — single attempt only.
+    } finally {
+      CONFIG.RETRY_BASE_DELAY_MS = originalBase;
+      CONFIG.MAX_RETRIES = originalMax;
+    }
   });
 });

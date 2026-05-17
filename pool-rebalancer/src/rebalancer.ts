@@ -13,6 +13,11 @@ import {
 } from '@areal/sdk/pda';
 import { parseRwtVault } from '@areal/sdk/rwt-engine';
 import {
+  parseDexConfig,
+  ProgramErrorCode,
+  decodeProgramError,
+} from '@areal/sdk/native-dex';
+import {
   buildCompressLiquidityIx,
   buildGrowLiquidityIx,
 } from '@areal/sdk/tx';
@@ -25,6 +30,18 @@ import {
 
 const POOL_TYPE_CONCENTRATED = 1;
 const NAV_DECIMALS = 1_000_000; // RWT nav_book_value is in 6 decimals
+
+/**
+ * CP-12.5 rebalancer kill-switch sentinel — `DexConfig.rebalancer = [0u8;32]`
+ * is the documented kill-switch state. Setting it freezes grow/compress
+ * (both ix re-check the pubkey on-chain and revert with `InvalidRebalancer`).
+ *
+ * Hardcoded here because SDK 0.12.2 does not yet export the constant. The
+ * authoritative source is `contracts/native-dex/src/constants.rs`
+ * (`REBALANCER_KILL_SWITCH: [u8; 32] = [0u8; 32]`) — when the SDK adds the
+ * export, swap the import in and delete this comment.
+ */
+export const REBALANCER_KILL_SWITCH: PublicKey = new PublicKey(new Uint8Array(32));
 
 /**
  * Decode `nav_book_value` from a raw RwtVault account buffer and convert it
@@ -76,6 +93,8 @@ export interface PoolInfo {
  */
 export type RebalanceDecision =
   | { kind: 'skip'; reason: SkipReason; detail?: string }
+  | { kind: 'skip-kill-switch'; detail?: string }
+  | { kind: 'skip-wrong-signer'; expected: string; actual: string }
   | { kind: 'noop'; detail: string }
   | {
       kind: 'grow_submitted';
@@ -88,7 +107,19 @@ export type RebalanceDecision =
       newNavBin: number;
       signature: string;
     }
-  | { kind: 'submission_failed'; newNavBin: number; pathway: 'grow' | 'compress'; error: string };
+  | {
+      kind: 'submission_failed';
+      newNavBin: number;
+      pathway: 'grow' | 'compress';
+      error: string;
+      /**
+       * `true` when the failure is a chain-side hard reject that won't be
+       * helped by retrying (currently only `NavBinMismatch`). The caller
+       * should log at warn level rather than error and avoid re-submitting
+       * the same args without re-reading NAV.
+       */
+      hardReject?: boolean;
+    };
 
 export type SkipReason =
   | 'wrong_pool_type'
@@ -97,7 +128,8 @@ export type SkipReason =
   | 'nav_unreadable'
   | 'nav_zero'
   | 'below_threshold'
-  | 'nexus_empty';
+  | 'nexus_empty'
+  | 'dex_config_unreadable';
 
 /**
  * Minimal RPC surface needed by the rebalancer. Carved out so tests can
@@ -232,10 +264,74 @@ export class Rebalancer {
       };
     }
 
+    // CP-12.5 pre-flight: read DexConfig and short-circuit if the
+    // Rebalancer slot is the kill-switch sentinel or has rotated to a
+    // different key. Avoids burning a tx on a guaranteed `InvalidRebalancer`
+    // revert (which is also the dominant source of alert noise from this
+    // bot when ops toggles the kill-switch).
+    const preflight = await this.preflightDexConfig();
+    if (preflight.kind !== 'ok') return preflight;
+
     if (newNavBin > pool.lastRebalanceNavBin) {
       return this.submitGrowLiquidity(pool, rwtVaultPda, newNavBin);
     }
     return this.submitCompressLiquidity(pool, rwtVaultPda, newNavBin);
+  }
+
+  /**
+   * CP-12.5 pre-flight. Returns `{ kind: 'ok' }` when the on-chain
+   * `DexConfig.rebalancer` matches `this.wallet.publicKey`. Otherwise
+   * returns the matching short-circuit decision:
+   *
+   * - `dex_config_unreadable` skip when the account is missing or fails to
+   *   parse (defensive — the bot can't tell which state we're in).
+   * - `skip-kill-switch` when the rebalancer slot is `[0u8; 32]`.
+   * - `skip-wrong-signer` when the slot has rotated to a different key.
+   *
+   * Both bypass paths produce a *decision* (not a thrown error) so the
+   * main loop's logDecision branch covers them and tests can assert on
+   * the kind directly.
+   */
+  private async preflightDexConfig(): Promise<
+    | { kind: 'ok' }
+    | { kind: 'skip'; reason: SkipReason; detail?: string }
+    | { kind: 'skip-kill-switch'; detail?: string }
+    | { kind: 'skip-wrong-signer'; expected: string; actual: string }
+  > {
+    const dexConfigInfo = await this.rpc.getAccountInfo(this.dexConfigPda);
+    if (!dexConfigInfo) {
+      return {
+        kind: 'skip',
+        reason: 'dex_config_unreadable',
+        detail: 'account not found',
+      };
+    }
+    let cfg;
+    try {
+      cfg = parseDexConfig(dexConfigInfo.data);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        kind: 'skip',
+        reason: 'dex_config_unreadable',
+        detail: `parse failed: ${msg}`,
+      };
+    }
+
+    if (cfg.rebalancer.equals(REBALANCER_KILL_SWITCH)) {
+      return {
+        kind: 'skip-kill-switch',
+        detail: 'rebalancer slot = [0u8;32] — bot idle',
+      };
+    }
+    if (!cfg.rebalancer.equals(this.wallet.publicKey)) {
+      return {
+        kind: 'skip-wrong-signer',
+        expected: cfg.rebalancer.toBase58(),
+        actual: this.wallet.publicKey.toBase58(),
+      };
+    }
+    return { kind: 'ok' };
   }
 
   private async submitGrowLiquidity(
@@ -296,6 +392,7 @@ export class Rebalancer {
       newNavBin,
       pathway: 'grow',
       error: submission.error,
+      ...(submission.hardReject ? { hardReject: true } : {}),
     };
   }
 
@@ -329,6 +426,7 @@ export class Rebalancer {
       newNavBin,
       pathway: 'compress',
       error: submission.error,
+      ...(submission.hardReject ? { hardReject: true } : {}),
     };
   }
 
@@ -336,10 +434,18 @@ export class Rebalancer {
    * Send a single-instruction tx with exponential backoff per architect
    * CP-9 spec (2^n × base, MAX_RETRIES attempts). Last error is preserved
    * for the submission_failed result.
+   *
+   * CP-12.5: short-circuits without retry when the chain returns
+   * `NavBinMismatch` (code 6068). Re-submitting the same `new_nav_bin`
+   * cannot succeed — the chain disagrees with our off-chain NAV→bin calc
+   * and the only safe next step is to re-read NAV on the next cycle.
    */
   private async submitWithBackoff(
     ix: TransactionInstruction,
-  ): Promise<{ kind: 'ok'; signature: string } | { kind: 'err'; error: string }> {
+  ): Promise<
+    | { kind: 'ok'; signature: string }
+    | { kind: 'err'; error: string; hardReject?: boolean }
+  > {
     let lastErr: unknown = null;
     for (let attempt = 1; attempt <= CONFIG.MAX_RETRIES; attempt++) {
       try {
@@ -348,6 +454,11 @@ export class Rebalancer {
         return { kind: 'ok', signature: sig };
       } catch (err) {
         lastErr = err;
+        if (isNavBinMismatch(err)) {
+          // Hard reject — chain disagrees on NAV. No retry, surface to caller.
+          const msg = err instanceof Error ? err.message : String(err);
+          return { kind: 'err', error: msg, hardReject: true };
+        }
         if (attempt < CONFIG.MAX_RETRIES) {
           const delay = CONFIG.RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
           await new Promise((r) => setTimeout(r, delay));
@@ -357,4 +468,23 @@ export class Rebalancer {
     const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
     return { kind: 'err', error: msg };
   }
+}
+
+/**
+ * Detect the on-chain `NavBinMismatch` (code 6068) inside the various error
+ * shapes Solana web3.js / @arlex/client can produce. Routed through
+ * `decodeProgramError` so the numeric → enum mapping stays a single SDK
+ * concern.
+ */
+function isNavBinMismatch(err: unknown): boolean {
+  const decoded = decodeProgramError(err);
+  if (decoded && decoded.code === ProgramErrorCode.NavBinMismatch) {
+    return true;
+  }
+  // Belt-and-braces: some error shapes (raw RPC strings, simulation logs)
+  // bypass `extractErrorCode`. Fall back to a substring match on the
+  // hex/decimal code and the error name. Cheap and won't false-positive on
+  // unrelated errors.
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes('NavBinMismatch') || msg.includes('0x17b4');
 }

@@ -81,6 +81,20 @@ function logDecision(pool: PoolInfo, decision: RebalanceDecision): void {
           (decision.detail ? ` detail=${decision.detail}` : ''),
       );
       return;
+    case 'skip-kill-switch':
+      // Informational, not a warning — the kill-switch is an operator-driven
+      // freeze and we expect to see this on every cycle while it's engaged.
+      console.log(
+        `[pool-rebalancer] kill-switch active — bot idle pool=${pool58}` +
+          (decision.detail ? ` detail=${decision.detail}` : ''),
+      );
+      return;
+    case 'skip-wrong-signer':
+      console.warn(
+        `[pool-rebalancer] rebalancer rotated to different key — bot idle until restart with new key ` +
+          `pool=${pool58} expected=${decision.expected} actual=${decision.actual}`,
+      );
+      return;
     case 'noop':
       console.log(`[pool-rebalancer] noop pool=${pool58} detail=${decision.detail}`);
       return;
@@ -97,10 +111,20 @@ function logDecision(pool: PoolInfo, decision: RebalanceDecision): void {
       );
       return;
     case 'submission_failed':
-      console.error(
-        `[pool-rebalancer] submission_failed pool=${pool58} pathway=${decision.pathway} ` +
-          `new_nav_bin=${decision.newNavBin} error=${decision.error}`,
-      );
+      // Hard rejects (NavBinMismatch) are warn-level — chain says our
+      // off-chain NAV→bin calc disagrees, but retry is futile so we drop
+      // it from the loud-error stream. Other failures stay as errors.
+      if (decision.hardReject) {
+        console.warn(
+          `[pool-rebalancer] submission_hard_reject pool=${pool58} pathway=${decision.pathway} ` +
+            `new_nav_bin=${decision.newNavBin} error=${decision.error}`,
+        );
+      } else {
+        console.error(
+          `[pool-rebalancer] submission_failed pool=${pool58} pathway=${decision.pathway} ` +
+            `new_nav_bin=${decision.newNavBin} error=${decision.error}`,
+        );
+      }
       return;
   }
 }
