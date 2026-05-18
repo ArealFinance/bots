@@ -67,7 +67,7 @@ class FakeStore {
   }
 }
 
-function fakeConfig(signerPubkey: PublicKey, arlOt: PublicKey): BotConfig {
+function fakeConfig(signerPubkey: PublicKey, sprkOt: PublicKey): BotConfig {
   return {
     network: 'devnet',
     rpcUrl: 'http://x',
@@ -78,7 +78,7 @@ function fakeConfig(signerPubkey: PublicKey, arlOt: PublicKey): BotConfig {
     otProgramId: Keypair.generate().publicKey,
     dexProgramId: null,
     minHoldingOtLamports: 100_000_000n,
-    arlOtTreasury: arlOt,
+    sprkOtTreasury: sprkOt,
     publisherPubkey: signerPubkey,
     publishIntervalMs: 600_000,
     kmsProvider: 'local',

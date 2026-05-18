@@ -15,8 +15,8 @@ Merkle Publisher releases a fresh root:
    `RwtDistributionConfig`.
 2. `DEX::compound_yield` — every OT/RWT pool PDA claims its share, folding the
    received RWT directly into the pool's RWT-side reserve (auto-compound LPs).
-3. `OT::claim_yd_for_treasury` — the ARL OtTreasury PDA claims its share for
-   each OT distributor (cross-project yield: ARL OtTreasury claims FROM RCP/TUR
+3. `OT::claim_yd_for_treasury` — the SPRK OtTreasury PDA claims its share for
+   each OT distributor (cross-project yield: SPRK OtTreasury claims FROM RCP/TUR
    distributors and so on).
 
 All three instructions are permissionless on-chain. The crank is a convenience
@@ -80,7 +80,7 @@ SQLite checkpoint is keyed `(claim_kind, key)` and stores the highest
 |---|---|
 | `vault` | OT mint (one row per OT distributor) |
 | `pool` | DEX pool address |
-| `treasury` | `${ARL_OT_MINT}:${distributor_OT_MINT}` |
+| `treasury` | `${SPRK_OT_MINT}:${distributor_OT_MINT}` |
 
 A proof file with epoch ≤ checkpoint is skipped without an RPC call. A proof
 file with epoch > checkpoint runs through the on-chain ix, which itself is
@@ -141,7 +141,7 @@ solana-keygen new -o yield-claim-crank/data/yield-claim-crank.json --no-bip39-pa
 # fund the wallet ~0.5 SOL on devnet
 ```
 
-Edit `.env` — fill `OT_PROJECTS`, `OT_RWT_POOLS`, `ARL_OT_MINT`, `RWT_MINT`,
+Edit `.env` — fill `OT_PROJECTS`, `OT_RWT_POOLS`, `SPRK_OT_MINT`, `RWT_MINT`,
 and choose a proof source: either `PROOF_DIR` (shared filesystem with the
 publisher) or `PROOF_BASE_URL` (HTTP).
 

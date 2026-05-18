@@ -1,8 +1,8 @@
 /**
  * Layer 10 Substep 6 — Scenario 3: DEX Standard (live-submit E2E).
  *
- * Validates the StandardCurve pool surface end-to-end on the ARL_OT/RWT pool
- * created in Substep 2 (`phaseArlRwtPool`). Four steps mirror the canonical
+ * Validates the StandardCurve pool surface end-to-end on the SPRK_OT/RWT pool
+ * created in Substep 2 (`phaseSprkRwtPool`). Four steps mirror the canonical
  * lifecycle:
  *
  *   S3.1  StandardCurve pool + LP + swap both directions + verify fees
@@ -18,7 +18,7 @@
  *
  * Mode of operation
  * ------------------
- * **Default (read-only):** asserts current on-chain state of the ARL_OT/RWT
+ * **Default (read-only):** asserts current on-chain state of the SPRK_OT/RWT
  * pool and runs the math closures against live reserves. Math identities are
  * unconditional; reserve-grew / balance-grew assertions need a snapshot pre/post
  * which the harness can't synthesise without driving live TXs — those are
@@ -36,13 +36,13 @@
  *   2. `art.authority_chain.completed_at` is set (Substep 3 ran).
  *   3. `art.bots_started_at` is set (Substep 4 ran).
  *   4. `RPC_URL` env var reachable.
- *   5. `art.pdas.arl_rwt_pool` populated (Substep 2 phaseArlRwtPool ran).
+ *   5. `art.pdas.sprk_rwt_pool` populated (Substep 2 phaseSprkRwtPool ran).
  *
  * Any unmet gate ⇒ structured skip (`assert.ok(true)` + `console.warn`).
  *
  * Pool target rationale
  * ---------------------
- * Substep 2 `phaseArlRwtPool` creates a StandardCurve ARL_OT/RWT pool with
+ * Substep 2 `phaseSprkRwtPool` creates a StandardCurve SPRK_OT/RWT pool with
  * `has_ot_treasury == true` (governance pool — OT pair fee routes to OT
  * treasury). This single pool exercises both StandardCurve invariants AND
  * OT-pair fee collection in S3.4. The master pool is concentrated (D40 / SD-4)
@@ -162,16 +162,16 @@ interface Artifact {
   mints?: {
     usdc_test_mint?: string;
     rwt_mint?: string;
-    arl_ot_mint?: string;
+    sprk_ot_mint?: string;
   };
   pdas?: {
     dex_config?: string;
     master_pool?: string;
     master_pool_vault_a?: string;
     master_pool_vault_b?: string;
-    arl_rwt_pool?: string;
-    arl_rwt_pool_vault_a?: string;
-    arl_rwt_pool_vault_b?: string;
+    sprk_rwt_pool?: string;
+    sprk_rwt_pool_vault_a?: string;
+    sprk_rwt_pool_vault_b?: string;
     [k: string]: string | undefined;
   };
   ots?: OtRecord[];
@@ -233,8 +233,8 @@ function evaluatePreflight(): PreflightResult {
   if (!art.bots_started_at) {
     reasons.push('bots_started_at not stamped (Substep 4 not run)');
   }
-  if (!art.pdas?.arl_rwt_pool) {
-    reasons.push('pdas.arl_rwt_pool missing — Substep 2 phaseArlRwtPool not run');
+  if (!art.pdas?.sprk_rwt_pool) {
+    reasons.push('pdas.sprk_rwt_pool missing — Substep 2 phaseSprkRwtPool not run');
   }
   return { ready: reasons.length === 0, reasons, art };
 }
@@ -259,7 +259,7 @@ if (!PREFLIGHT.ready) {
   // ------------------------------------------------------------------------
   const art = PREFLIGHT.art!;
   const conn = new Connection(RPC_URL!, 'confirmed');
-  const arlRwtPoolPda = new PublicKey(art.pdas!.arl_rwt_pool!);
+  const arlRwtPoolPda = new PublicKey(art.pdas!.sprk_rwt_pool!);
 
   // ----------------------------------------------------------------------
   // Helpers
@@ -380,29 +380,29 @@ if (!PREFLIGHT.ready) {
   // Schema sanity
   // ----------------------------------------------------------------------
 
-  test('S3 sanity — DEX program + ARL/RWT pool wiring', async () => {
+  test('S3 sanity — DEX program + SPRK/RWT pool wiring', async () => {
     assert.equal(art.schema_version, 1, 'schema_version drift');
     assert.ok(art.programs.native_dex, 'DEX program ID missing');
     assert.ok(art.pdas?.dex_config, 'dex_config PDA missing');
-    assert.ok(art.pdas?.arl_rwt_pool, 'arl_rwt_pool PDA missing');
-    assert.ok(art.pdas?.arl_rwt_pool_vault_a, 'arl_rwt_pool_vault_a missing');
-    assert.ok(art.pdas?.arl_rwt_pool_vault_b, 'arl_rwt_pool_vault_b missing');
+    assert.ok(art.pdas?.sprk_rwt_pool, 'sprk_rwt_pool PDA missing');
+    assert.ok(art.pdas?.sprk_rwt_pool_vault_a, 'sprk_rwt_pool_vault_a missing');
+    assert.ok(art.pdas?.sprk_rwt_pool_vault_b, 'sprk_rwt_pool_vault_b missing');
     assert.ok(art.mints?.rwt_mint, 'rwt_mint missing');
-    assert.ok(art.mints?.arl_ot_mint, 'arl_ot_mint missing');
+    assert.ok(art.mints?.sprk_ot_mint, 'sprk_ot_mint missing');
 
     const pool = await readPool(arlRwtPoolPda);
-    assert.ok(pool, 'ARL/RWT pool not initialized on-chain');
+    assert.ok(pool, 'SPRK/RWT pool not initialized on-chain');
     assert.equal(
       pool!.poolType,
       POOL_TYPE_STANDARD,
-      `ARL/RWT pool_type = ${pool!.poolType}, expected POOL_TYPE_STANDARD(0)`,
+      `SPRK/RWT pool_type = ${pool!.poolType}, expected POOL_TYPE_STANDARD(0)`,
     );
     assert.notEqual(
       pool!.poolType,
       POOL_TYPE_CONCENTRATED,
-      'ARL/RWT pool MUST NOT be concentrated — Substep 7 owns concentrated tests',
+      'SPRK/RWT pool MUST NOT be concentrated — Substep 7 owns concentrated tests',
     );
-    assert.ok(pool!.isActive, 'ARL/RWT pool is_active must be true');
+    assert.ok(pool!.isActive, 'SPRK/RWT pool is_active must be true');
   });
 
   // ----------------------------------------------------------------------
@@ -411,11 +411,11 @@ if (!PREFLIGHT.ready) {
 
   test('S3.1 StandardCurve — reserves > 0 + constant-product math closure', async () => {
     const pool = await readPool(arlRwtPoolPda);
-    assert.ok(pool, 'ARL/RWT pool missing');
+    assert.ok(pool, 'SPRK/RWT pool missing');
 
-    // Substep 2 phaseArlRwtPool seeds liquidity (1_000 ARL OT + 1_000 RWT,
+    // Substep 2 phaseSprkRwtPool seeds liquidity (1_000 SPRK OT + 1_000 RWT,
     // approximately balanced 50/50 — see scripts/lib/bootstrap-init.ts
-    // `phaseArlRwtPool`). After the seed the pool MUST have non-zero reserves
+    // `phaseSprkRwtPool`). After the seed the pool MUST have non-zero reserves
     // on both sides.
     assert.ok(
       pool!.reserveA > 0n,
@@ -536,7 +536,7 @@ if (!PREFLIGHT.ready) {
 
   test('S3.2 zap_liquidity — pool LP-shares grew above first-add floor', async () => {
     const pool = await readPool(arlRwtPoolPda);
-    assert.ok(pool, 'ARL/RWT pool missing');
+    assert.ok(pool, 'SPRK/RWT pool missing');
 
     // Zap accepts single-sided amount_a or amount_b (the contract internally
     // splits the input via swap to balance the add). Verifying a specific
@@ -607,7 +607,7 @@ if (!PREFLIGHT.ready) {
 
   test('S3.3 remove_liquidity — proportional return math closure', async () => {
     const pool = await readPool(arlRwtPoolPda);
-    assert.ok(pool, 'ARL/RWT pool missing');
+    assert.ok(pool, 'SPRK/RWT pool missing');
 
     // remove_liquidity proportional return — see amm.rs:calculate_remove_amounts:
     //   out_a = floor(shares * reserve_a / total_lp_shares)
@@ -673,20 +673,20 @@ if (!PREFLIGHT.ready) {
 
   test('S3.4 OT pair fee — has_ot_treasury + fee_destination + treasury readable', async () => {
     const pool = await readPool(arlRwtPoolPda);
-    assert.ok(pool, 'ARL/RWT pool missing');
+    assert.ok(pool, 'SPRK/RWT pool missing');
 
-    // ARL_OT/RWT is a governance pool — has_ot_treasury MUST be true
-    // (set by phaseArlRwtPool via remainingAccounts[0..2] in create_pool).
+    // SPRK_OT/RWT is a governance pool — has_ot_treasury MUST be true
+    // (set by phaseSprkRwtPool via remainingAccounts[0..2] in create_pool).
     assert.ok(
       pool!.hasOtTreasury,
-      'ARL/RWT pool has_ot_treasury must be true (OT pair fee routing)',
+      'SPRK/RWT pool has_ot_treasury must be true (OT pair fee routing)',
     );
 
     // ot_treasury_fee_destination MUST be non-zero pubkey when has_ot_treasury.
     const allZero = pool!.otTreasuryFeeDest.toBuffer().every((b) => b === 0);
     assert.ok(
       !allZero,
-      `ARL/RWT pool ot_treasury_fee_destination must be non-zero (got ${pool!.otTreasuryFeeDest.toBase58()})`,
+      `SPRK/RWT pool ot_treasury_fee_destination must be non-zero (got ${pool!.otTreasuryFeeDest.toBase58()})`,
     );
 
     // Cross-check: ot_treasury_fee_destination should be the treasury RWT ATA
@@ -705,25 +705,25 @@ if (!PREFLIGHT.ready) {
       'OT treasury fee destination balance must be u64 readable',
     );
 
-    // Find the ARL OT record to compare against ot_treasury_pda. The treasury
+    // Find the SPRK OT record to compare against ot_treasury_pda. The treasury
     // ATA address itself isn't in the artifact, but the ATA's owner IS the
     // ot_treasury_pda for this OT. We surface the linkage as an info log.
-    const arlMint = art.mints?.arl_ot_mint;
-    const arlOt: OtRecord | undefined = (art.ots ?? []).find(
-      (o) => arlMint && o.ot_mint === arlMint,
+    const sprkMint = art.mints?.sprk_ot_mint;
+    const sprkOt: OtRecord | undefined = (art.ots ?? []).find(
+      (o) => sprkMint && o.ot_mint === sprkMint,
     );
-    if (arlOt?.ot_treasury_pda) {
+    if (sprkOt?.ot_treasury_pda) {
       // eslint-disable-next-line no-console
       console.log(
         `[layer-10-scenario-3] S3.4: pool ot_treasury_fee_destination=${pool!.otTreasuryFeeDest.toBase58()} ` +
-          `(treasury PDA owner=${arlOt.ot_treasury_pda})`,
+          `(treasury PDA owner=${sprkOt.ot_treasury_pda})`,
       );
     }
 
     if (LIVE_MODE) {
       // eslint-disable-next-line no-console
       console.log(
-        '[layer-10-scenario-3] LIVE_MODE: ARL_OT/RWT swap → OT treasury fee accrual ' +
+        '[layer-10-scenario-3] LIVE_MODE: SPRK_OT/RWT swap → OT treasury fee accrual ' +
           `deferred to operator (treasury ATA balance=${destBalance})`,
       );
     }

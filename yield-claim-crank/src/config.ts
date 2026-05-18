@@ -32,7 +32,7 @@ const EnvSchema = z.object({
   OT_PROJECTS: z.string().default(''),
   OT_RWT_POOLS: z.string().default(''),
 
-  ARL_OT_MINT: z.string().min(32),
+  SPRK_OT_MINT: z.string().min(32),
   RWT_MINT: z.string().min(32),
 
   CLAIM_INTERVAL_SECS: z.coerce.number().int().positive().default(1800),
@@ -99,7 +99,7 @@ export interface BotConfig {
   otProjects: PublicKey[];
   otRwtPools: PublicKey[];
 
-  arlOtMint: PublicKey;
+  sprkOtMint: PublicKey;
   rwtMint: PublicKey;
 
   claimIntervalSecs: number;
@@ -177,7 +177,7 @@ export function loadConfig(): BotConfig {
     otProjects,
     otRwtPools,
 
-    arlOtMint: pubkeyOrThrow(raw.ARL_OT_MINT, 'ARL_OT_MINT'),
+    sprkOtMint: pubkeyOrThrow(raw.SPRK_OT_MINT, 'SPRK_OT_MINT'),
     rwtMint: pubkeyOrThrow(raw.RWT_MINT, 'RWT_MINT'),
 
     claimIntervalSecs: raw.CLAIM_INTERVAL_SECS,

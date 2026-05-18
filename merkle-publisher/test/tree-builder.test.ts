@@ -122,7 +122,7 @@ describe('aggregateSnapshots — Alice→Bob fairness', () => {
     expect(total).toBe(1500n);
   });
 
-  it('routes 100% to ARL Treasury when no eligible holders at snapshot', () => {
+  it('routes 100% to SPRK Treasury when no eligible holders at snapshot', () => {
     const snapshots: Snapshot[] = [
       snap(distributor, 0, 1000n, []), // no holders at all
     ];
@@ -131,7 +131,7 @@ describe('aggregateSnapshots — Alice→Bob fairness', () => {
     expect(cumulative.get(arlTreasury.toBase58())).toBe(1000n);
   });
 
-  it('routes non-eligible balance share to ARL Treasury', () => {
+  it('routes non-eligible balance share to SPRK Treasury', () => {
     const snapshots: Snapshot[] = [
       snap(distributor, 0, 1000n, [
         { holder: alice, balance: 100n, eligible: 1 },
@@ -145,7 +145,7 @@ describe('aggregateSnapshots — Alice→Bob fairness', () => {
     expect(cumulative.get(bob)).toBeUndefined();
   });
 
-  it('moves rounding remainder to ARL Treasury', () => {
+  it('moves rounding remainder to SPRK Treasury', () => {
     // deposit=10, two holders each holding 1 OT → share = 10*1/2 = 5 each → no remainder.
     // Make remainder appear: deposit=10, three holders 1 each → share = 10*1/3 = 3 each → 1 remainder.
     const c = Keypair.generate().publicKey.toBase58();

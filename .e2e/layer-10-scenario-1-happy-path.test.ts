@@ -14,7 +14,7 @@
  *   4.  merkle-publisher publish_root             → YD state (epoch++)
  *   5.  yield-claim-crank claim_yield 70/15/15    → RWT engine
  *   6.  compound_yield → pool reserves grow       → DEX
- *   7.  claim_yd_for_treasury → ARL OT treasury   → OT
+ *   7.  claim_yd_for_treasury → SPRK OT treasury   → OT
  *   8.  user YD::claim w/ proof + ClaimStatus     → YD
  *   9.  cross-contract final state verification   → all
  *
@@ -53,7 +53,7 @@
  * If all 9 steps pass:
  *   - **R-A** authority chain: distributions only succeed if the OT/YD
  *     authority handoff completed (any deployer-signed CPI would have failed).
- *   - **R-B** mint_ot preserved: ARL OT supply moves through the loop.
+ *   - **R-B** mint_ot preserved: SPRK OT supply moves through the loop.
  *   - **R-C** publisher race: yield-claim-crank produced a non-zero merkle
  *     root delivered by the publisher.
  *   - **R-G** zero-authority audit: the cranks consumed the rotated
@@ -228,7 +228,7 @@ interface Artifact {
   mints?: {
     usdc_test_mint?: string;
     rwt_mint?: string;
-    arl_ot_mint?: string;
+    sprk_ot_mint?: string;
   };
   pdas?: {
     rwt_vault?: string;
@@ -331,10 +331,10 @@ if (!PREFLIGHT.ready) {
   const art = PREFLIGHT.art!;
   const conn = new Connection(RPC_URL!, 'confirmed');
 
-  /** Find the ARL OT record (ARL is the mint that has the master distributor). */
-  const arlOtMint = art.mints?.arl_ot_mint;
-  const arlOt: OtRecord | undefined = (art.ots ?? []).find(
-    (o) => arlOtMint && o.ot_mint === arlOtMint,
+  /** Find the SPRK OT record (SPRK is the mint that has the master distributor). */
+  const sprkOtMint = art.mints?.sprk_ot_mint;
+  const sprkOt: OtRecord | undefined = (art.ots ?? []).find(
+    (o) => sprkOtMint && o.ot_mint === sprkOtMint,
   );
 
   // ----------------------------------------------------------------------
@@ -402,36 +402,36 @@ if (!PREFLIGHT.ready) {
   // Schema sanity — same shape Layer 8/9 rely on.
   // ----------------------------------------------------------------------
 
-  /** Structured-skip helper for tests that need a populated ARL OT record. */
+  /** Structured-skip helper for tests that need a populated SPRK OT record. */
   function skipIfNoArlOt(testName: string): boolean {
     if (
-      !arlOt ||
-      !arlOt.yd_distributor_pda ||
-      !arlOt.yd_accumulator_pda ||
-      !arlOt.accumulator_usdc_ata
+      !sprkOt ||
+      !sprkOt.yd_distributor_pda ||
+      !sprkOt.yd_accumulator_pda ||
+      !sprkOt.accumulator_usdc_ata
     ) {
       // eslint-disable-next-line no-console
       console.warn(
-        `[layer-10-scenario-1] ${testName} skipped — ARL OT record incomplete (mints.arl_ot_mint missing or ots[] not populated)`,
+        `[layer-10-scenario-1] ${testName} skipped — SPRK OT record incomplete (mints.sprk_ot_mint missing or ots[] not populated)`,
       );
       return true;
     }
     return false;
   }
 
-  test('S1 sanity — schema_version, programs, ARL OT record', async () => {
+  test('S1 sanity — schema_version, programs, SPRK OT record', async () => {
     assert.equal(art.schema_version, 1, 'schema_version drift');
     assert.ok(art.programs.ownership_token, 'OT program missing');
     assert.ok(art.programs.yield_distribution, 'YD program missing');
     assert.ok(art.programs.rwt_engine, 'RWT program missing');
     assert.ok(art.programs.native_dex, 'DEX program missing');
-    if (skipIfNoArlOt('S1 sanity ARL OT')) {
+    if (skipIfNoArlOt('S1 sanity SPRK OT')) {
       assert.ok(true, 'see warning above');
       return;
     }
-    assert.ok(arlOt!.yd_distributor_pda, 'ARL OT distributor PDA missing');
-    assert.ok(arlOt!.yd_accumulator_pda, 'ARL OT accumulator PDA missing');
-    assert.ok(arlOt!.accumulator_usdc_ata, 'ARL OT accumulator USDC ATA missing');
+    assert.ok(sprkOt!.yd_distributor_pda, 'SPRK OT distributor PDA missing');
+    assert.ok(sprkOt!.yd_accumulator_pda, 'SPRK OT accumulator PDA missing');
+    assert.ok(sprkOt!.accumulator_usdc_ata, 'SPRK OT accumulator USDC ATA missing');
   });
 
   // ----------------------------------------------------------------------
@@ -543,7 +543,7 @@ if (!PREFLIGHT.ready) {
       assert.ok(true, 'see warning above');
       return;
     }
-    const ata = new PublicKey(arlOt!.accumulator_usdc_ata!);
+    const ata = new PublicKey(sprkOt!.accumulator_usdc_ata!);
     const before = await readTokenBalance(ata);
     assert.ok(
       before !== null,
@@ -602,15 +602,15 @@ if (!PREFLIGHT.ready) {
     assert.equal(postFee, 498_750_000n, 'post-fee balance for $500 input');
 
     // A-57: read on-chain RevenueConfig.destinations[].allocation_bps to
-    // detect drift from the canonical ARL split. Per ownership-token
+    // detect drift from the canonical SPRK split. Per ownership-token
     // state.rs:11-95: each RevenueDestination is 66 bytes
     // (address[32] + allocation_bps u16 LE + label[32]); destinations[10]
     // sits at offset 40 in the account data; active_count u8 is at offset 700.
-    // ARL canonical: 3 destinations with bps [7000, 2000, 1000] (yd/treasury/nexus).
+    // SPRK canonical: 3 destinations with bps [7000, 2000, 1000] (yd/treasury/nexus).
     const expectedBps: readonly [bigint, bigint, bigint] = [7000n, 2000n, 1000n];
-    if (arlOt!.revenue_config_pda) {
+    if (sprkOt!.revenue_config_pda) {
       const revCfg = await conn.getAccountInfo(
-        new PublicKey(arlOt!.revenue_config_pda),
+        new PublicKey(sprkOt!.revenue_config_pda),
         'confirmed',
       );
       assert.ok(revCfg, 'RevenueConfig PDA not found');
@@ -619,7 +619,7 @@ if (!PREFLIGHT.ready) {
         `RevenueConfig data length ${revCfg!.data.length} too short — layout drift`,
       );
       const activeCount = revCfg!.data.readUInt8(OT_REV_CFG_ACTIVE_COUNT_OFFSET);
-      assert.equal(activeCount, 3, `ARL RevenueConfig.active_count must be 3 (got ${activeCount})`);
+      assert.equal(activeCount, 3, `SPRK RevenueConfig.active_count must be 3 (got ${activeCount})`);
       for (let i = 0; i < 3; i++) {
         const destOff = OT_REV_CFG_DESTS_OFFSET + i * OT_REV_DEST_SIZE;
         const bps: bigint = BigInt(revCfg!.data.readUInt16LE(destOff + OT_REV_DEST_BPS_OFFSET));
@@ -633,7 +633,7 @@ if (!PREFLIGHT.ready) {
     } else {
       // eslint-disable-next-line no-console
       console.warn(
-        '[layer-10-scenario-1] revenue_config_pda missing on ARL OT — bps verified vs canonical only',
+        '[layer-10-scenario-1] revenue_config_pda missing on SPRK OT — bps verified vs canonical only',
       );
     }
 
@@ -668,14 +668,14 @@ if (!PREFLIGHT.ready) {
       assert.ok(true, 'see warning above');
       return;
     }
-    if (!arlOt!.reward_vault) {
+    if (!sprkOt!.reward_vault) {
       // eslint-disable-next-line no-console
-      console.warn('[layer-10-scenario-1] reward_vault missing on ARL OT — skipping');
+      console.warn('[layer-10-scenario-1] reward_vault missing on SPRK OT — skipping');
       assert.ok(true);
       return;
     }
-    const accumulatorAta = new PublicKey(arlOt!.accumulator_usdc_ata!);
-    const rewardVault = new PublicKey(arlOt!.reward_vault!);
+    const accumulatorAta = new PublicKey(sprkOt!.accumulator_usdc_ata!);
+    const rewardVault = new PublicKey(sprkOt!.reward_vault!);
 
     const accBalance = await readTokenBalance(accumulatorAta);
     const vaultBalance = await readTokenBalance(rewardVault);
@@ -702,7 +702,7 @@ if (!PREFLIGHT.ready) {
       assert.ok(true, 'see warning above');
       return;
     }
-    const dist = new PublicKey(arlOt!.yd_distributor_pda!);
+    const dist = new PublicKey(sprkOt!.yd_distributor_pda!);
     const info = await conn.getAccountInfo(dist, 'confirmed');
     assert.ok(info, 'MerkleDistributor account not found');
     assert.ok(
@@ -727,7 +727,7 @@ if (!PREFLIGHT.ready) {
       assert.ok(true, 'see warning above');
       return;
     }
-    const dist = new PublicKey(arlOt!.yd_distributor_pda!);
+    const dist = new PublicKey(sprkOt!.yd_distributor_pda!);
     const info = await conn.getAccountInfo(dist, 'confirmed');
     assert.ok(info, 'MerkleDistributor missing');
     assert.ok(
@@ -859,17 +859,17 @@ if (!PREFLIGHT.ready) {
   });
 
   // ----------------------------------------------------------------------
-  // Step 7 — claim_yd_for_treasury → ARL Treasury RWT balance grows
+  // Step 7 — claim_yd_for_treasury → SPRK Treasury RWT balance grows
   // ----------------------------------------------------------------------
 
   test('S1.7 claim_yd_for_treasury — OT governance reachable', async () => {
-    if (!arlOt?.ot_governance_pda) {
+    if (!sprkOt?.ot_governance_pda) {
       // eslint-disable-next-line no-console
       console.warn('[layer-10-scenario-1] S1.7 skipped — ot_governance_pda missing');
       assert.ok(true);
       return;
     }
-    const otGov = new PublicKey(arlOt!.ot_governance_pda!);
+    const otGov = new PublicKey(sprkOt!.ot_governance_pda!);
     const info = await conn.getAccountInfo(otGov, 'confirmed');
     assert.ok(info, 'OT governance PDA not found');
     // Strict treasury-balance-grew assertion requires reading the OT
@@ -890,7 +890,7 @@ if (!PREFLIGHT.ready) {
       assert.ok(true, 'see warning above');
       return;
     }
-    const dist = new PublicKey(arlOt!.yd_distributor_pda!);
+    const dist = new PublicKey(sprkOt!.yd_distributor_pda!);
     const info = await conn.getAccountInfo(dist, 'confirmed');
     assert.ok(info, 'distributor missing');
 
@@ -920,7 +920,7 @@ if (!PREFLIGHT.ready) {
   test('S1.9 cross-contract final state — aggregate invariants', async () => {
     // The aggregate invariants Scenario 1 must satisfy:
     //   1. RWT vault initialized + NAV >= INITIAL_NAV ($1.00)  (RWT)
-    //   2. ARL OT supply > 0                                    (OT)
+    //   2. SPRK OT supply > 0                                    (OT)
     //   3. Master pool reserves present                         (DEX)
     //   4. distributor.total_funded > 0                         (YD)
     //   5. LiquidityNexus principal floors readable             (DEX-Nexus)
@@ -938,17 +938,17 @@ if (!PREFLIGHT.ready) {
       assert.ok(nav >= NAV_SCALE, `NAV must be >= INITIAL_NAV (got ${nav})`);
     }
 
-    // 2. ARL OT supply
-    if (art.mints?.arl_ot_mint) {
+    // 2. SPRK OT supply
+    if (art.mints?.sprk_ot_mint) {
       const mintInfo = await conn.getAccountInfo(
-        new PublicKey(art.mints.arl_ot_mint),
+        new PublicKey(art.mints.sprk_ot_mint),
         'confirmed',
       );
-      assert.ok(mintInfo, 'ARL OT mint not found');
+      assert.ok(mintInfo, 'SPRK OT mint not found');
       // SPL Mint layout: offset 36 = supply (u64 LE)
       if (mintInfo!.data.length >= 44) {
         const supply = mintInfo!.data.readBigUInt64LE(36);
-        assert.ok(supply > 0n, `ARL OT supply must be > 0 (got ${supply})`);
+        assert.ok(supply > 0n, `SPRK OT supply must be > 0 (got ${supply})`);
       }
     }
 
@@ -959,8 +959,8 @@ if (!PREFLIGHT.ready) {
     }
 
     // 4. distributor.total_funded re-asserted
-    if (arlOt?.yd_distributor_pda) {
-      const d = await conn.getAccountInfo(new PublicKey(arlOt.yd_distributor_pda), 'confirmed');
+    if (sprkOt?.yd_distributor_pda) {
+      const d = await conn.getAccountInfo(new PublicKey(sprkOt.yd_distributor_pda), 'confirmed');
       assert.ok(d, 'distributor missing');
       if (d!.data.length >= DIST_OFFSET_TOTAL_FUNDED + 8) {
         const tf = d!.data.readBigUInt64LE(DIST_OFFSET_TOTAL_FUNDED);
@@ -981,8 +981,8 @@ if (!PREFLIGHT.ready) {
     }
 
     // 6. Accumulator
-    if (arlOt?.accumulator_usdc_ata) {
-      const a = await readTokenBalance(new PublicKey(arlOt.accumulator_usdc_ata));
+    if (sprkOt?.accumulator_usdc_ata) {
+      const a = await readTokenBalance(new PublicKey(sprkOt.accumulator_usdc_ata));
       assert.ok(a !== null, 'accumulator USDC ATA unreadable');
     }
 

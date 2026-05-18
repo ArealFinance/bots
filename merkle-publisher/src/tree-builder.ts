@@ -20,7 +20,7 @@ import type { BuiltTree, LeafMap, Snapshot } from './types.js';
  * For each snapshot i, each eligible holder h receives:
  *   share_i(h) = floor(deposit_amount_i * balance_i(h) / total_eligible_i)
  *
- * The remainder (deposit_amount_i - Σ share) is added to the ARL OT Treasury
+ * The remainder (deposit_amount_i - Σ share) is added to the SPRK OT Treasury
  * leaf (matching contract spec: residual yield becomes protocol revenue).
  *
  * NOTE on gross vs net: `snap.depositAmount` is the NET amount that actually
@@ -31,7 +31,7 @@ import type { BuiltTree, LeafMap, Snapshot } from './types.js';
  */
 export function aggregateSnapshots(
   snapshots: Snapshot[],
-  arlOtTreasury: PublicKey,
+  sprkOtTreasury: PublicKey,
 ): LeafMap {
   const cumulative: LeafMap = new Map();
   let totalAllocated = 0n;
@@ -41,8 +41,8 @@ export function aggregateSnapshots(
     totalFunded += snap.depositAmount;
 
     if (snap.totalEligible === 0n) {
-      // No eligible holder at this snapshot — 100% of the deposit goes to ARL Treasury.
-      const key = arlOtTreasury.toBase58();
+      // No eligible holder at this snapshot — 100% of the deposit goes to SPRK Treasury.
+      const key = sprkOtTreasury.toBase58();
       cumulative.set(key, (cumulative.get(key) ?? 0n) + snap.depositAmount);
       totalAllocated += snap.depositAmount;
       continue;
@@ -58,10 +58,10 @@ export function aggregateSnapshots(
       snapAllocated += share;
     }
 
-    // Per-snapshot rounding remainder → ARL Treasury.
+    // Per-snapshot rounding remainder → SPRK Treasury.
     const snapRemainder = snap.depositAmount - snapAllocated;
     if (snapRemainder > 0n) {
-      const key = arlOtTreasury.toBase58();
+      const key = sprkOtTreasury.toBase58();
       cumulative.set(key, (cumulative.get(key) ?? 0n) + snapRemainder);
     }
     totalAllocated += snapAllocated + snapRemainder;

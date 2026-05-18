@@ -23,7 +23,7 @@ const EnvSchema = z.object({
   DEX_PROGRAM_ID: z.string().min(32).optional(),
 
   MIN_HOLDING_OT_LAMPORTS: z.coerce.bigint().default(100_000_000n),
-  ARL_OT_TREASURY: z.string().min(32),
+  SPRK_OT_TREASURY: z.string().min(32),
 
   PUBLISHER_PUBKEY: z.string().min(32),
 
@@ -70,7 +70,7 @@ export interface BotConfig {
   dexProgramId: PublicKey | null;
 
   minHoldingOtLamports: bigint;
-  arlOtTreasury: PublicKey;
+  sprkOtTreasury: PublicKey;
 
   publisherPubkey: PublicKey;
 
@@ -121,7 +121,7 @@ export function loadConfig(): BotConfig {
     dexProgramId: raw.DEX_PROGRAM_ID ? new PublicKey(raw.DEX_PROGRAM_ID) : null,
 
     minHoldingOtLamports: raw.MIN_HOLDING_OT_LAMPORTS,
-    arlOtTreasury: new PublicKey(raw.ARL_OT_TREASURY),
+    sprkOtTreasury: new PublicKey(raw.SPRK_OT_TREASURY),
 
     publisherPubkey: new PublicKey(raw.PUBLISHER_PUBKEY),
 

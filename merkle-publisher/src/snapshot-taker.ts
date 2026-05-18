@@ -126,7 +126,7 @@ export class SnapshotTaker {
    * owner are summed. PDAs (RWT Vault, DEX Pools, OT Treasury) are regular
    * owners from the SPL Token perspective; excluded pubkeys from the L-5
    * denylist are stripped here (before eligibility), so their OT simply
-   * disappears from the tree (residual is then routed to ARL Treasury by the
+   * disappears from the tree (residual is then routed to SPRK Treasury by the
    * aggregator).
    *
    * Integrity defences:
@@ -153,7 +153,7 @@ export class SnapshotTaker {
 
     // Apply L-5 denylist AFTER the invariant check (so protocol-owned balances
     // still count towards supply). Excluded balances vanish and their share
-    // becomes ARL Treasury residual via the aggregator remainder.
+    // becomes SPRK Treasury residual via the aggregator remainder.
     const ownerBalances = new Map<string, bigint>();
     let excludedCount = 0;
     for (const [owner, balance] of primary) {

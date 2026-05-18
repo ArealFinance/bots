@@ -356,10 +356,10 @@ export async function assertAuthorityChainComplete(
   opts: AuthorityChainTargets,
   art: ZeroAuthorityArtifact,
 ): Promise<ZeroAuthorityResult> {
-  const arlOt = Array.isArray(art.ots) && art.ots.length > 0 ? art.ots[0] : null;
+  const sprkOt = Array.isArray(art.ots) && art.ots.length > 0 ? art.ots[0] : null;
   const futarchyConfigPda =
     opts.futarchyConfigPda ??
-    (arlOt?.futarchy_config_pda ? new PublicKey(arlOt.futarchy_config_pda) : null);
+    (sprkOt?.futarchy_config_pda ? new PublicKey(sprkOt.futarchy_config_pda) : null);
 
   const multisigB58 = opts.multisigPubkey.toBase58();
   const futarchyB58 = futarchyConfigPda ? futarchyConfigPda.toBase58() : null;
@@ -368,14 +368,14 @@ export async function assertAuthorityChainComplete(
     {
       contract: 'OT',
       artifactField: 'ots[0].ot_governance_pda',
-      pdaBase58: arlOt?.ot_governance_pda ?? null,
+      pdaBase58: sprkOt?.ot_governance_pda ?? null,
       authorityOffset: OT_GOVERNANCE_AUTHORITY_OFFSET,
       expectedAuthorityB58: futarchyB58,
     },
     {
       contract: 'Futarchy',
       artifactField: 'ots[0].futarchy_config_pda',
-      pdaBase58: arlOt?.futarchy_config_pda ?? null,
+      pdaBase58: sprkOt?.futarchy_config_pda ?? null,
       authorityOffset: FUTARCHY_CONFIG_AUTHORITY_OFFSET,
       expectedAuthorityB58: multisigB58,
     },
@@ -443,21 +443,21 @@ export async function assertDeployerHasNoAuthority(
   deployerPubkey: PublicKey,
   art: ZeroAuthorityArtifact,
 ): Promise<ZeroAuthorityResult> {
-  const arlOt = Array.isArray(art.ots) && art.ots.length > 0 ? art.ots[0] : null;
+  const sprkOt = Array.isArray(art.ots) && art.ots.length > 0 ? art.ots[0] : null;
   const deployerB58 = deployerPubkey.toBase58();
 
   const specs: ReadAuthoritySpec[] = [
     {
       contract: 'OT',
       artifactField: 'ots[0].ot_governance_pda',
-      pdaBase58: arlOt?.ot_governance_pda ?? null,
+      pdaBase58: sprkOt?.ot_governance_pda ?? null,
       authorityOffset: OT_GOVERNANCE_AUTHORITY_OFFSET,
       expectedAuthorityB58: deployerB58,
     },
     {
       contract: 'Futarchy',
       artifactField: 'ots[0].futarchy_config_pda',
-      pdaBase58: arlOt?.futarchy_config_pda ?? null,
+      pdaBase58: sprkOt?.futarchy_config_pda ?? null,
       authorityOffset: FUTARCHY_CONFIG_AUTHORITY_OFFSET,
       expectedAuthorityB58: deployerB58,
     },

@@ -2,7 +2,7 @@
  * Layer 10 Substep 8 — Scenario 6: Emergency + Authority Operations (live-submit E2E).
  *
  * **FINAL Layer-10 scenario.** Closes the live-verification leg of R-A
- * (authority chain integrity), R-B (ARL OT mint preserved post-Phase-7),
+ * (authority chain integrity), R-B (SPRK OT mint preserved post-Phase-7),
  * R-C (publisher rotation fence), and R-G (deployer-zero-authority
  * cross-coverage assertion) — see Risk Register entries in the Layer 10
  * architecture design doc.
@@ -64,7 +64,7 @@
  *   6. `art.pdas.rwt_vault` populated (Substep 1 phaseRwtVault ran).
  *   7. `art.pdas.dex_config` populated (Substep 1 DEX init ran).
  *   8. `art.pdas.yd_dist_config` populated (Substep 1 YD init ran).
- *   9. `art.ots[0]` (ARL OT) record present with governance + futarchy PDAs.
+ *   9. `art.ots[0]` (SPRK OT) record present with governance + futarchy PDAs.
  *
  * Any unmet gate => structured skip (`assert.ok(true)` + `console.warn`).
  *
@@ -341,7 +341,7 @@ interface Artifact {
   mints?: {
     usdc_test_mint?: string;
     rwt_mint?: string;
-    arl_ot_mint?: string;
+    sprk_ot_mint?: string;
   };
   pdas?: {
     dex_config?: string;
@@ -426,11 +426,11 @@ function evaluatePreflight(): PreflightResult {
   if (!art.pdas?.yd_dist_config) {
     reasons.push('pdas.yd_dist_config missing — YD not bootstrapped');
   }
-  const arlOt = Array.isArray(art.ots) && art.ots.length > 0 ? art.ots[0] : null;
-  if (!arlOt?.ot_governance_pda) {
+  const sprkOt = Array.isArray(art.ots) && art.ots.length > 0 ? art.ots[0] : null;
+  if (!sprkOt?.ot_governance_pda) {
     reasons.push('ots[0].ot_governance_pda missing — OT init incomplete');
   }
-  if (!arlOt?.futarchy_config_pda) {
+  if (!sprkOt?.futarchy_config_pda) {
     reasons.push('ots[0].futarchy_config_pda missing — Futarchy init incomplete');
   }
   return { ready: reasons.length === 0, reasons, art };
@@ -460,7 +460,7 @@ if (!PREFLIGHT.ready) {
   const rwtVaultPda = new PublicKey(art.pdas!.rwt_vault!);
   const dexConfigPda = new PublicKey(art.pdas!.dex_config!);
   const ydDistConfigPda = new PublicKey(art.pdas!.yd_dist_config!);
-  const arlOt = art.ots![0]!;
+  const sprkOt = art.ots![0]!;
 
   // ----------------------------------------------------------------------
   // Helpers
@@ -614,8 +614,8 @@ if (!PREFLIGHT.ready) {
     assert.ok(art.pdas?.rwt_vault, 'rwt_vault PDA missing');
     assert.ok(art.pdas?.dex_config, 'dex_config PDA missing');
     assert.ok(art.pdas?.yd_dist_config, 'yd_dist_config PDA missing');
-    assert.ok(arlOt.ot_governance_pda, 'ots[0].ot_governance_pda missing');
-    assert.ok(arlOt.futarchy_config_pda, 'ots[0].futarchy_config_pda missing');
+    assert.ok(sprkOt.ot_governance_pda, 'ots[0].ot_governance_pda missing');
+    assert.ok(sprkOt.futarchy_config_pda, 'ots[0].futarchy_config_pda missing');
   });
 
   // ----------------------------------------------------------------------
@@ -1048,7 +1048,7 @@ if (!PREFLIGHT.ready) {
     // is reachable and the is_active byte is a legal enum — pre/post-close
     // diff is operator-driven (close_distributor must be signed by the
     // rotated authority).
-    if (!arlOt.yd_distributor_pda) {
+    if (!sprkOt.yd_distributor_pda) {
       // eslint-disable-next-line no-console
       console.warn(
         '[layer-10-scenario-6] S6.8: ots[0].yd_distributor_pda missing — YD distributor surface untested',
@@ -1056,7 +1056,7 @@ if (!PREFLIGHT.ready) {
       assert.ok(true, 'see warning above');
       return;
     }
-    const distributorPda = new PublicKey(arlOt.yd_distributor_pda);
+    const distributorPda = new PublicKey(sprkOt.yd_distributor_pda);
     const info = await conn.getAccountInfo(distributorPda, 'confirmed');
     if (!info) {
       // eslint-disable-next-line no-console
@@ -1208,7 +1208,7 @@ if (!PREFLIGHT.ready) {
     // artifact records `multisig_pubkey == deployer`, the test passes with
     // a structured note (devnet rehearsal mode).
     const deployerB58 = deployerPubkey.toBase58();
-    const arlOtRecord = arlOt;
+    const sprkOtRecord = sprkOt;
 
     // Five independent specs — same fixed order as
     // scripts/lib/zero-authority-audit.ts:assertDeployerHasNoAuthority
@@ -1218,13 +1218,13 @@ if (!PREFLIGHT.ready) {
       {
         contract: 'OT',
         artifactField: 'ots[0].ot_governance_pda',
-        pdaBase58: arlOtRecord.ot_governance_pda,
+        pdaBase58: sprkOtRecord.ot_governance_pda,
         authorityOffset: OT_GOVERNANCE_AUTHORITY_OFFSET,
       },
       {
         contract: 'Futarchy',
         artifactField: 'ots[0].futarchy_config_pda',
-        pdaBase58: arlOtRecord.futarchy_config_pda,
+        pdaBase58: sprkOtRecord.futarchy_config_pda,
         authorityOffset: FUTARCHY_CONFIG_AUTHORITY_OFFSET,
       },
       {

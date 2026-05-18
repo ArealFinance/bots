@@ -55,7 +55,7 @@ async function main(): Promise<void> {
     otProgram: cfg.otProgramId.toBase58(),
     otProjects: cfg.otProjects.length,
     otRwtPools: cfg.otRwtPools.length,
-    arlOtMint: cfg.arlOtMint.toBase58(),
+    sprkOtMint: cfg.sprkOtMint.toBase58(),
     proofSource: cfg.proofSource.kind,
     intervalSecs: cfg.claimIntervalSecs,
   });

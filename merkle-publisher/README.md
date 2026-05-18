@@ -45,7 +45,7 @@ event-watcher  ─►  snapshot-taker  ─►  snapshot-store (SQLite)
 cd bots/merkle-publisher
 npm install
 cp .env.example .env
-# fill in YD_PROGRAM_ID, OT_PROGRAM_ID, ARL_OT_TREASURY, PUBLISHER_PUBKEY, etc.
+# fill in YD_PROGRAM_ID, OT_PROGRAM_ID, SPRK_OT_TREASURY, PUBLISHER_PUBKEY, etc.
 
 # Devnet: generate a local mock keypair (NOT for mainnet)
 solana-keygen new -o ./local-mock-keypair.json --no-bip39-passphrase

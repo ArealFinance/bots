@@ -1,13 +1,13 @@
 /**
  * Layer 10 Substep 6 — Scenario 2: Governance (Futarchy live-submit E2E).
  *
- * Validates the Futarchy proposal lifecycle for the ARL OT mint. Five steps
+ * Validates the Futarchy proposal lifecycle for the SPRK OT mint. Five steps
  * mirror the canonical proposal-type matrix + cancel + authority-rejection.
  *
  *   S2.1  Create + approve + execute MintOt proposal
- *         → ARL OT supply increases by proposal.amount.
+ *         → SPRK OT supply increases by proposal.amount.
  *   S2.2  Create + approve + execute SpendTreasury proposal
- *         → ARL Treasury USDC ATA decreases by proposal.amount.
+ *         → SPRK Treasury USDC ATA decreases by proposal.amount.
  *   S2.3  Create + approve + execute UpdateDestinations proposal
  *         → RevenueConfig.destinations rewritten + config_version bumps.
  *   S2.4  Cancel a pending proposal → status transitions Active → Cancelled.
@@ -39,7 +39,7 @@
  *   2. `art.authority_chain.completed_at` is set (Substep 3 ran — handoff done).
  *   3. `art.bots_started_at` is set (Substep 4 ran).
  *   4. `RPC_URL` env var reachable.
- *   5. ARL OT record present with `futarchy_config_pda` populated (Phase 6).
+ *   5. SPRK OT record present with `futarchy_config_pda` populated (Phase 6).
  *
  * Any unmet gate ⇒ structured skip (`assert.ok(true)` + `console.warn`).
  *
@@ -205,7 +205,7 @@ interface Artifact {
   mints?: {
     usdc_test_mint?: string;
     rwt_mint?: string;
-    arl_ot_mint?: string;
+    sprk_ot_mint?: string;
   };
   pdas?: {
     rwt_vault?: string;
@@ -273,15 +273,15 @@ function evaluatePreflight(): PreflightResult {
   if (!art.bots_started_at) {
     reasons.push('bots_started_at not stamped (Substep 4 not run)');
   }
-  if (!art.mints?.arl_ot_mint) {
-    reasons.push('mints.arl_ot_mint missing — Phase 3 ARL OT bootstrap incomplete');
+  if (!art.mints?.sprk_ot_mint) {
+    reasons.push('mints.sprk_ot_mint missing — Phase 3 SPRK OT bootstrap incomplete');
   }
-  const arlMint = art.mints?.arl_ot_mint;
-  const arlOt: OtRecord | undefined = (art.ots ?? []).find(
-    (o) => arlMint && o.ot_mint === arlMint,
+  const sprkMint = art.mints?.sprk_ot_mint;
+  const sprkOt: OtRecord | undefined = (art.ots ?? []).find(
+    (o) => sprkMint && o.ot_mint === sprkMint,
   );
-  if (!arlOt?.futarchy_config_pda) {
-    reasons.push('ARL OT futarchy_config_pda missing — Phase 6 (initialize_futarchy) not run');
+  if (!sprkOt?.futarchy_config_pda) {
+    reasons.push('SPRK OT futarchy_config_pda missing — Phase 6 (initialize_futarchy) not run');
   }
   return { ready: reasons.length === 0, reasons, art };
 }
@@ -309,15 +309,15 @@ if (!PREFLIGHT.ready) {
   const conn = new Connection(RPC_URL!, 'confirmed');
   const futProgramId = new PublicKey(art.programs.futarchy);
 
-  /** Find the ARL OT record. */
-  const arlOtMint = art.mints?.arl_ot_mint;
-  const arlOt: OtRecord | undefined = (art.ots ?? []).find(
-    (o) => arlOtMint && o.ot_mint === arlOtMint,
+  /** Find the SPRK OT record. */
+  const sprkOtMint = art.mints?.sprk_ot_mint;
+  const sprkOt: OtRecord | undefined = (art.ots ?? []).find(
+    (o) => sprkOtMint && o.ot_mint === sprkOtMint,
   );
   // PREFLIGHT guarantees both populated; the cast keeps TS happy after the
   // gate evaluation collapsed the optional shape.
-  const arlOtRec: OtRecord = arlOt!;
-  const futarchyConfigPda = new PublicKey(arlOtRec.futarchy_config_pda!);
+  const sprkOtRec: OtRecord = sprkOt!;
+  const futarchyConfigPda = new PublicKey(sprkOtRec.futarchy_config_pda!);
 
   // ----------------------------------------------------------------------
   // Helpers
@@ -425,14 +425,14 @@ if (!PREFLIGHT.ready) {
   // Schema sanity
   // ----------------------------------------------------------------------
 
-  test('S2 sanity — futarchy program + ARL OT futarchy_config wiring', async () => {
+  test('S2 sanity — futarchy program + SPRK OT futarchy_config wiring', async () => {
     assert.equal(art.schema_version, 1, 'schema_version drift');
     assert.ok(art.programs.futarchy, 'Futarchy program ID missing');
     assert.ok(art.programs.ownership_token, 'OT program ID missing');
-    assert.ok(arlOtRec.futarchy_config_pda, 'ARL OT futarchy_config_pda missing (Phase 6)');
-    assert.ok(arlOtRec.ot_governance_pda, 'ARL OT ot_governance_pda missing (Phase 4)');
-    assert.ok(arlOtRec.revenue_config_pda, 'ARL OT revenue_config_pda missing (Phase 4)');
-    assert.ok(arlOtRec.ot_treasury_pda, 'ARL OT ot_treasury_pda missing (Phase 4)');
+    assert.ok(sprkOtRec.futarchy_config_pda, 'SPRK OT futarchy_config_pda missing (Phase 6)');
+    assert.ok(sprkOtRec.ot_governance_pda, 'SPRK OT ot_governance_pda missing (Phase 4)');
+    assert.ok(sprkOtRec.revenue_config_pda, 'SPRK OT revenue_config_pda missing (Phase 4)');
+    assert.ok(sprkOtRec.ot_treasury_pda, 'SPRK OT ot_treasury_pda missing (Phase 4)');
 
     const cfg = await conn.getAccountInfo(futarchyConfigPda, 'confirmed');
     assert.ok(cfg, 'FutarchyConfig PDA not found on-chain');
@@ -443,18 +443,18 @@ if (!PREFLIGHT.ready) {
   });
 
   // ----------------------------------------------------------------------
-  // S2.1 — MintOt proposal — propose → approve → execute → ARL OT supply grew
+  // S2.1 — MintOt proposal — propose → approve → execute → SPRK OT supply grew
   // ----------------------------------------------------------------------
 
   test('S2.1 MintOt proposal — type / status / supply invariants', async () => {
-    if (!art.mints?.arl_ot_mint) {
-      assert.ok(true, 'arl_ot_mint missing — skipping');
+    if (!art.mints?.sprk_ot_mint) {
+      assert.ok(true, 'sprk_ot_mint missing — skipping');
       return;
     }
-    const arlMintPk = new PublicKey(art.mints.arl_ot_mint);
-    const supply = await readMintSupply(arlMintPk);
-    assert.ok(supply !== null, 'ARL OT mint not readable');
-    assert.ok(supply! >= 0n, 'ARL OT supply must be u64 readable');
+    const sprkMintPk = new PublicKey(art.mints.sprk_ot_mint);
+    const supply = await readMintSupply(sprkMintPk);
+    assert.ok(supply !== null, 'SPRK OT mint not readable');
+    assert.ok(supply! >= 0n, 'SPRK OT supply must be u64 readable');
 
     // Look for a most-recent MintOt proposal. If none exists, we still verify
     // that the supply has grown past zero (initial mint via Phase 6). Live
@@ -489,12 +489,12 @@ if (!PREFLIGHT.ready) {
     );
 
     if (proposal.status === PROPOSAL_STATUS_EXECUTED) {
-      // Post-execute, ARL OT supply MUST be >= proposal.amount (cumulative).
+      // Post-execute, SPRK OT supply MUST be >= proposal.amount (cumulative).
       // We can't snapshot pre/post without timing access to the ix submission;
       // instead we assert the floor invariant.
       assert.ok(
         supply! >= proposal.amount,
-        `ARL OT supply ${supply} < executed MintOt amount ${proposal.amount}`,
+        `SPRK OT supply ${supply} < executed MintOt amount ${proposal.amount}`,
       );
     }
 
@@ -512,17 +512,17 @@ if (!PREFLIGHT.ready) {
   // ----------------------------------------------------------------------
 
   test('S2.2 SpendTreasury proposal — type / status / treasury USDC ATA invariants', async () => {
-    if (!arlOtRec.treasury_usdc_ata) {
+    if (!sprkOtRec.treasury_usdc_ata) {
       // eslint-disable-next-line no-console
       console.warn(
-        '[layer-10-scenario-2] S2.2: treasury_usdc_ata missing on ARL OT — skipping',
+        '[layer-10-scenario-2] S2.2: treasury_usdc_ata missing on SPRK OT — skipping',
       );
       assert.ok(true);
       return;
     }
-    const treasuryAta = new PublicKey(arlOtRec.treasury_usdc_ata);
+    const treasuryAta = new PublicKey(sprkOtRec.treasury_usdc_ata);
     const balance = await readTokenBalance(treasuryAta);
-    assert.ok(balance !== null, 'ARL Treasury USDC ATA not initialized');
+    assert.ok(balance !== null, 'SPRK Treasury USDC ATA not initialized');
     assert.ok(balance! >= 0n, 'Treasury USDC balance must be u64 readable');
 
     const proposal = await findLatestProposalOfType(PROPOSAL_TYPE_SPEND_TREASURY);
@@ -572,15 +572,15 @@ if (!PREFLIGHT.ready) {
   // ----------------------------------------------------------------------
 
   test('S2.3 UpdateDestinations proposal — type / status / config_version invariants', async () => {
-    if (!arlOtRec.revenue_config_pda) {
+    if (!sprkOtRec.revenue_config_pda) {
       // eslint-disable-next-line no-console
       console.warn(
-        '[layer-10-scenario-2] S2.3: revenue_config_pda missing on ARL OT — skipping',
+        '[layer-10-scenario-2] S2.3: revenue_config_pda missing on SPRK OT — skipping',
       );
       assert.ok(true);
       return;
     }
-    const revCfgPda = new PublicKey(arlOtRec.revenue_config_pda);
+    const revCfgPda = new PublicKey(sprkOtRec.revenue_config_pda);
     const info = await conn.getAccountInfo(revCfgPda, 'confirmed');
     assert.ok(info, 'RevenueConfig PDA not found');
     assert.ok(
@@ -704,11 +704,11 @@ if (!PREFLIGHT.ready) {
   // ----------------------------------------------------------------------
 
   test('S2.5 zero-authority — deployer != OT governance authority post-Phase-7', async () => {
-    if (!arlOtRec.ot_governance_pda) {
+    if (!sprkOtRec.ot_governance_pda) {
       assert.ok(true, 'ot_governance_pda missing — skipping');
       return;
     }
-    const otGovPda = new PublicKey(arlOtRec.ot_governance_pda);
+    const otGovPda = new PublicKey(sprkOtRec.ot_governance_pda);
     const info = await conn.getAccountInfo(otGovPda, 'confirmed');
     assert.ok(info, 'OtGovernance PDA not found');
     assert.ok(
@@ -766,8 +766,8 @@ if (!PREFLIGHT.ready) {
     // and surface as a structured note (mainnet rehearsal closes the
     // negative-check; on devnet, Phase 7's positive `assertAuthorityChainComplete`
     // is the live R-G mitigation).
-    if (art.deployer_pubkey && arlOtRec.futarchy_config_pda) {
-      const futCfgPda = new PublicKey(arlOtRec.futarchy_config_pda);
+    if (art.deployer_pubkey && sprkOtRec.futarchy_config_pda) {
+      const futCfgPda = new PublicKey(sprkOtRec.futarchy_config_pda);
       const futInfo = await conn.getAccountInfo(futCfgPda, 'confirmed');
       if (futInfo && futInfo.data.length >= FUTARCHY_CFG_AUTHORITY_OFFSET + 32) {
         const futAuthBytes = futInfo.data.subarray(

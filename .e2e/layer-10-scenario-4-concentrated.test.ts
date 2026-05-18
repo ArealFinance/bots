@@ -46,7 +46,7 @@
  * Pool target rationale
  * ---------------------
  * Substep 2 phaseMasterPool creates the master RWT/USDC pool as
- * POOL_TYPE_CONCENTRATED per CP-4. Scenario 3 tests StandardCurve (ARL_OT/RWT);
+ * POOL_TYPE_CONCENTRATED per CP-4. Scenario 3 tests StandardCurve (SPRK_OT/RWT);
  * Scenario 4 here tests Monotonic Ladder surface (RWT master pool).
  */
 import { strict as assert } from 'node:assert';
@@ -470,7 +470,7 @@ if (!PREFLIGHT.ready) {
     // OT-pair fee routing MUST NOT be set on the master pool.
     assert.ok(
       !pool!.hasOtTreasury,
-      'master pool has_ot_treasury must be false — OT routing belongs on ARL_OT/RWT pair',
+      'master pool has_ot_treasury must be false — OT routing belongs on SPRK_OT/RWT pair',
     );
 
     // BinArray length gate for 630-bin layout: 10_131 bytes.

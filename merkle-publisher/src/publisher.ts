@@ -84,7 +84,7 @@ export class Publisher {
     // publish_root encodes. Note: per-deposit fairness means we re-aggregate
     // from ALL snapshots each publish, not just unpublished — the cumulative
     // amount is a monotonic function across the distributor's lifetime.
-    const leafMap = aggregateSnapshots(snapshots, this.cfg.arlOtTreasury);
+    const leafMap = aggregateSnapshots(snapshots, this.cfg.sprkOtTreasury);
     if (leafMap.size === 0) {
       logger.debug('no eligible holders yet', { distributor: distributorKey });
       return;

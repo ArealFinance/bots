@@ -553,9 +553,9 @@ export async function runClaimCycle(args: {
     }
   }
 
-  // (3) Treasury claim per OT distributor (ARL claims its share for every OT)
+  // (3) Treasury claim per OT distributor (SPRK claims its share for every OT)
   for (const ydOtMint of cfg.otProjects) {
-    const k = `treasury:${cfg.arlOtMint.toBase58()}:${ydOtMint.toBase58()}`;
+    const k = `treasury:${cfg.sprkOtMint.toBase58()}:${ydOtMint.toBase58()}`;
     if (!lock.acquire(k)) continue;
     try {
       await processTreasuryClaim({
@@ -563,7 +563,7 @@ export async function runClaimCycle(args: {
         cfg,
         checkpoint,
         fetcher,
-        otMint: cfg.arlOtMint,
+        otMint: cfg.sprkOtMint,
         ydOtMint,
         inputs: null,
         client,
