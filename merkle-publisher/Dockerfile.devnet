@@ -1,0 +1,77 @@
+# Devnet build Dockerfile for merkle-publisher.
+#
+# `bots/` is an npm workspace root (see bots/package.json::workspaces).
+# `@areal/sdk` is declared as `file:../../sdk` from each workspace, and npm
+# resolves it via a symlink at `bots/node_modules/@areal/sdk -> ../../../sdk`.
+# We therefore mirror the meta-repo layout (`/workspace/{sdk,vendor,bots}`)
+# in BOTH builder and runtime so the symlink resolves at runtime too.
+#
+# `better-sqlite3` is a native module — alpine needs python/make/g++ to
+# compile. Runtime image only needs libstdc++.
+#
+# Build from the meta-repo root:
+#   docker build \
+#     -f bots/merkle-publisher/Dockerfile.devnet \
+#     -t areal-merkle-publisher-devnet:latest .
+
+FROM node:22-alpine AS builder
+WORKDIR /workspace
+
+RUN apk add --no-cache python3 make g++ libc6-compat
+
+# 1. Stage SDK + vendor first. The bot resolves `@areal/sdk` via
+#    `file:../../sdk` so this directory must exist before `npm ci`.
+COPY vendor ./vendor
+COPY sdk ./sdk
+
+# 2. Build the SDK — produces dist/ that subpath exports resolve into.
+WORKDIR /workspace/sdk
+RUN npm ci --ignore-scripts && npm run build
+
+# 3. Stage every workspace's package.json + the workspace-root lockfile
+#    so `npm ci` resolves the full graph deterministically. Only
+#    `merkle-publisher` is installed (-w flag) to keep the image small.
+WORKDIR /workspace
+COPY bots/package.json bots/package-lock.json ./bots/
+COPY bots/shared/package.json ./bots/shared/
+COPY bots/merkle-publisher/package.json ./bots/merkle-publisher/
+COPY bots/pool-rebalancer/package.json ./bots/pool-rebalancer/
+COPY bots/revenue-crank/package.json ./bots/revenue-crank/
+COPY bots/convert-and-fund-crank/package.json ./bots/convert-and-fund-crank/
+COPY bots/yield-claim-crank/package.json ./bots/yield-claim-crank/
+COPY bots/nexus-manager/package.json ./bots/nexus-manager/
+
+WORKDIR /workspace/bots
+RUN npm ci -w merkle-publisher --include-workspace-root=false
+
+# 4. Copy bot sources and build.
+COPY bots/merkle-publisher ./merkle-publisher
+RUN npm run build -w merkle-publisher
+
+# 5. Drop devDeps so the runtime image stays lean. `npm prune` keeps the
+#    workspace symlinks intact.
+RUN npm prune --omit=dev
+
+
+FROM node:22-alpine AS runtime
+WORKDIR /workspace/bots/merkle-publisher
+
+# Runtime libs for native modules (better-sqlite3 needs libstdc++).
+RUN apk add --no-cache libstdc++ libc6-compat \
+ && addgroup -S areal && adduser -S areal -G areal
+
+# Mirror the meta-repo layout exactly so the workspace symlink graph
+# resolves the same as in the builder:
+#   /workspace/sdk            ← @areal/sdk (target of file:../../sdk)
+#   /workspace/vendor         ← arlex-client tarball ref
+#   /workspace/bots/          ← workspace root (node_modules + symlinks)
+#   /workspace/bots/merkle-publisher/  ← entry point
+COPY --from=builder --chown=areal:areal /workspace/sdk /workspace/sdk
+COPY --from=builder --chown=areal:areal /workspace/vendor /workspace/vendor
+COPY --from=builder --chown=areal:areal /workspace/bots/node_modules /workspace/bots/node_modules
+COPY --from=builder --chown=areal:areal /workspace/bots/package.json /workspace/bots/package.json
+COPY --from=builder --chown=areal:areal /workspace/bots/merkle-publisher /workspace/bots/merkle-publisher
+
+USER areal
+ENV NODE_ENV=production
+CMD ["node", "dist/src/index.js"]

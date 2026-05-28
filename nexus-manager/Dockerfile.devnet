@@ -1,0 +1,52 @@
+# Devnet build Dockerfile for nexus-manager. See convert-and-fund-crank/Dockerfile.devnet
+# for the pattern; only the workspace name and entrypoint differ.
+
+FROM node:22-alpine AS builder
+WORKDIR /workspace
+
+RUN apk add --no-cache python3 make g++ libc6-compat
+
+COPY vendor ./vendor
+COPY sdk ./sdk
+
+WORKDIR /workspace/sdk
+RUN npm ci --ignore-scripts && npm run build
+
+WORKDIR /workspace
+COPY bots/package.json bots/package-lock.json ./bots/
+COPY bots/shared/package.json ./bots/shared/
+COPY bots/merkle-publisher/package.json ./bots/merkle-publisher/
+COPY bots/pool-rebalancer/package.json ./bots/pool-rebalancer/
+COPY bots/revenue-crank/package.json ./bots/revenue-crank/
+COPY bots/convert-and-fund-crank/package.json ./bots/convert-and-fund-crank/
+COPY bots/yield-claim-crank/package.json ./bots/yield-claim-crank/
+COPY bots/nexus-manager/package.json ./bots/nexus-manager/
+
+WORKDIR /workspace/bots
+RUN npm ci -w @areal/bots-shared -w nexus-manager --include-workspace-root=false
+
+COPY bots/shared ./shared
+RUN npm run build -w @areal/bots-shared
+
+COPY bots/nexus-manager ./nexus-manager
+RUN npm run build -w nexus-manager
+
+RUN npm prune --omit=dev
+
+
+FROM node:22-alpine AS runtime
+WORKDIR /workspace/bots/nexus-manager
+
+RUN apk add --no-cache libstdc++ libc6-compat \
+ && addgroup -S areal && adduser -S areal -G areal
+
+COPY --from=builder --chown=areal:areal /workspace/sdk /workspace/sdk
+COPY --from=builder --chown=areal:areal /workspace/vendor /workspace/vendor
+COPY --from=builder --chown=areal:areal /workspace/bots/node_modules /workspace/bots/node_modules
+COPY --from=builder --chown=areal:areal /workspace/bots/package.json /workspace/bots/package.json
+COPY --from=builder --chown=areal:areal /workspace/bots/shared /workspace/bots/shared
+COPY --from=builder --chown=areal:areal /workspace/bots/nexus-manager /workspace/bots/nexus-manager
+
+USER areal
+ENV NODE_ENV=production
+CMD ["node", "dist/src/index.js"]

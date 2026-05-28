@@ -1,0 +1,70 @@
+# Devnet build Dockerfile for convert-and-fund-crank.
+#
+# Pattern mirrors bots/merkle-publisher/Dockerfile.devnet, with one extra step:
+# this bot depends on @areal/bots-shared, so we build the shared package
+# before installing the bot's workspace.
+#
+# Build from the meta-repo root:
+#   docker build \
+#     -f bots/convert-and-fund-crank/Dockerfile.devnet \
+#     -t areal-convert-and-fund-crank-devnet:latest .
+
+FROM node:22-alpine AS builder
+WORKDIR /workspace
+
+RUN apk add --no-cache python3 make g++ libc6-compat
+
+# 1. Stage SDK + vendor + shared sources first. The bot resolves @areal/sdk
+#    via `file:../../sdk` and @areal/bots-shared via npm workspace symlink.
+COPY vendor ./vendor
+COPY sdk ./sdk
+
+# 2. Build the SDK.
+WORKDIR /workspace/sdk
+RUN npm ci --ignore-scripts && npm run build
+
+# 3. Stage every workspace's package.json + the workspace-root lockfile
+#    so `npm ci` resolves the full graph deterministically.
+WORKDIR /workspace
+COPY bots/package.json bots/package-lock.json ./bots/
+COPY bots/shared/package.json ./bots/shared/
+COPY bots/merkle-publisher/package.json ./bots/merkle-publisher/
+COPY bots/pool-rebalancer/package.json ./bots/pool-rebalancer/
+COPY bots/revenue-crank/package.json ./bots/revenue-crank/
+COPY bots/convert-and-fund-crank/package.json ./bots/convert-and-fund-crank/
+COPY bots/yield-claim-crank/package.json ./bots/yield-claim-crank/
+COPY bots/nexus-manager/package.json ./bots/nexus-manager/
+
+# 4. Install bot + shared workspaces. Shared is a workspace dep that must be
+#    installed before its dist/ is built.
+WORKDIR /workspace/bots
+RUN npm ci -w @areal/bots-shared -w convert-and-fund-crank --include-workspace-root=false
+
+# 5. Copy shared sources, build the shared package (produces dist/).
+COPY bots/shared ./shared
+RUN npm run build -w @areal/bots-shared
+
+# 6. Copy bot sources and build.
+COPY bots/convert-and-fund-crank ./convert-and-fund-crank
+RUN npm run build -w convert-and-fund-crank
+
+# 7. Drop devDeps; workspace symlinks survive.
+RUN npm prune --omit=dev
+
+
+FROM node:22-alpine AS runtime
+WORKDIR /workspace/bots/convert-and-fund-crank
+
+RUN apk add --no-cache libstdc++ libc6-compat \
+ && addgroup -S areal && adduser -S areal -G areal
+
+COPY --from=builder --chown=areal:areal /workspace/sdk /workspace/sdk
+COPY --from=builder --chown=areal:areal /workspace/vendor /workspace/vendor
+COPY --from=builder --chown=areal:areal /workspace/bots/node_modules /workspace/bots/node_modules
+COPY --from=builder --chown=areal:areal /workspace/bots/package.json /workspace/bots/package.json
+COPY --from=builder --chown=areal:areal /workspace/bots/shared /workspace/bots/shared
+COPY --from=builder --chown=areal:areal /workspace/bots/convert-and-fund-crank /workspace/bots/convert-and-fund-crank
+
+USER areal
+ENV NODE_ENV=production
+CMD ["node", "dist/src/index.js"]

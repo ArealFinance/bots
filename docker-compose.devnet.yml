@@ -1,0 +1,166 @@
+# Devnet deployment compose file for areal bots.
+#
+# Runs alongside the areal-devnet stack (backend/docker-compose.prod.yml).
+# Each bot has its own container, no shared volumes with the backend stack.
+# All bots are host-network-free: they need only outbound RPC + filesystem.
+#
+# Build from the meta-repo root:
+#   docker compose -f bots/docker-compose.devnet.yml --env-file bots/.env.devnet up -d --build
+
+name: areal-bots-devnet
+
+services:
+  merkle-publisher:
+    build:
+      context: ..
+      dockerfile: bots/merkle-publisher/Dockerfile.devnet
+    container_name: areal-merkle-publisher-devnet
+    restart: unless-stopped
+    environment:
+      NETWORK: ${NETWORK:-devnet}
+      RPC_URL: ${RPC_URL}
+      RPC_WS_URL: ${RPC_WS_URL}
+      ARCHIVAL_RPC_URL: ${ARCHIVAL_RPC_URL}
+      YD_PROGRAM_ID: ${YD_PROGRAM_ID}
+      OT_PROGRAM_ID: ${OT_PROGRAM_ID}
+      DEX_PROGRAM_ID: ${DEX_PROGRAM_ID}
+      MIN_HOLDING_OT_LAMPORTS: ${MIN_HOLDING_OT_LAMPORTS:-100000000}
+      SPRK_OT_TREASURY: ${SPRK_OT_TREASURY}
+      PUBLISHER_PUBKEY: ${PUBLISHER_PUBKEY}
+      PUBLISH_INTERVAL_MS: ${PUBLISH_INTERVAL_MS:-600000}
+      KMS_PROVIDER: ${KMS_PROVIDER:-local}
+      KMS_KEY_ID: ${KMS_KEY_ID:-/data/keypair.json}
+      DB_PATH: ${DB_PATH:-/data/merkle-publisher.db}
+      PROOF_DIR: ${PROOF_DIR:-/data/proofs}
+      EXCLUDED_HOLDERS: ${EXCLUDED_HOLDERS:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      # Host directory mode 700, owned by uid:gid matching the `areal` user
+      # inside the container (Alpine `adduser -S` allocates from the 65xxx
+      # range — we chown on the host to match before first start).
+      - /opt/areal-devnet/merkle-publisher-data:/data
+
+  convert-and-fund-crank:
+    build:
+      context: ..
+      dockerfile: bots/convert-and-fund-crank/Dockerfile.devnet
+    container_name: areal-convert-and-fund-crank-devnet
+    restart: unless-stopped
+    environment:
+      NETWORK: ${NETWORK:-devnet}
+      RPC_URLS: ${RPC_URLS_DEVNET}
+      CONVERT_FUND_CRANK_KEYPAIR_PATH: /data/keypair.json
+      YD_PROGRAM_ID: ${YD_PROGRAM_ID}
+      DEX_PROGRAM_ID: ${DEX_PROGRAM_ID}
+      RWT_ENGINE_PROGRAM_ID: ${RWT_ENGINE_PROGRAM_ID}
+      OT_PROGRAM_ID: ${OT_PROGRAM_ID}
+      USDC_MINT: ${USDC_MINT}
+      RWT_MINT: ${RWT_MINT}
+      RWT_USDC_POOL: ${MASTER_POOL_PDA}
+      OT_PROJECTS: ${OT_PROJECTS:-}
+      COMPUTE_UNIT_LIMIT: ${COMPUTE_UNIT_LIMIT:-300000}
+      COMPUTE_UNIT_PRICE_MICROLAMPORTS: ${COMPUTE_UNIT_PRICE_MICROLAMPORTS:-10000}
+      SLIPPAGE_BPS: ${SLIPPAGE_BPS:-100}
+      MIN_CONVERT_USDC: ${MIN_CONVERT_USDC:-1000000}
+      LOCK_DIR: /data/locks
+      DB_PATH: /data/checkpoint.db
+      CHECK_INTERVAL_SECS: ${CHECK_INTERVAL_SECS:-300}
+      SEND_TX: ${SEND_TX:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - /opt/areal-devnet/bots-data/convert-and-fund-crank:/data
+
+  revenue-crank:
+    build:
+      context: ..
+      dockerfile: bots/revenue-crank/Dockerfile.devnet
+    container_name: areal-revenue-crank-devnet
+    restart: unless-stopped
+    environment:
+      NETWORK: ${NETWORK:-devnet}
+      RPC_URLS: ${RPC_URLS_DEVNET}
+      REVENUE_CRANK_KEYPAIR_PATH: /data/keypair.json
+      OT_PROGRAM_ID: ${OT_PROGRAM_ID}
+      OT_PROJECTS: ${OT_PROJECTS:-}
+      LOCK_DIR: /data/locks
+      DB_PATH: /data/checkpoint.db
+      CHECK_INTERVAL_SECS: ${REVENUE_CHECK_INTERVAL_SECS:-3600}
+      SEND_TX: ${SEND_TX:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - /opt/areal-devnet/bots-data/revenue-crank:/data
+
+  yield-claim-crank:
+    build:
+      context: ..
+      dockerfile: bots/yield-claim-crank/Dockerfile.devnet
+    container_name: areal-yield-claim-crank-devnet
+    restart: unless-stopped
+    environment:
+      NETWORK: ${NETWORK:-devnet}
+      RPC_URLS: ${RPC_URLS_DEVNET}
+      YIELD_CLAIM_CRANK_KEYPAIR_PATH: /data/keypair.json
+      YD_PROGRAM_ID: ${YD_PROGRAM_ID}
+      RWT_ENGINE_PROGRAM_ID: ${RWT_ENGINE_PROGRAM_ID}
+      DEX_PROGRAM_ID: ${DEX_PROGRAM_ID}
+      OT_PROGRAM_ID: ${OT_PROGRAM_ID}
+      PROOF_DIR: /proofs
+      OT_PROJECTS: ${OT_PROJECTS:-}
+      OT_RWT_POOLS: ${OT_RWT_POOLS:-}
+      SPRK_OT_MINT: ${SPRK_OT_MINT}
+      RWT_MINT: ${RWT_MINT}
+      CLAIM_INTERVAL_SECS: ${CLAIM_INTERVAL_SECS:-1800}
+      COMPUTE_UNIT_LIMIT: ${YIELD_COMPUTE_UNIT_LIMIT:-150000}
+      COMPUTE_UNIT_PRICE_MICROLAMPORTS: ${COMPUTE_UNIT_PRICE_MICROLAMPORTS:-10000}
+      LOCK_DIR: /data/locks
+      DB_PATH: /data/checkpoint.db
+      SEND_TX: ${SEND_TX:-false}
+      YIELD_CLAIM_ENABLE_LH_DRAIN: ${YIELD_CLAIM_ENABLE_LH_DRAIN:-false}
+      YIELD_CLAIM_ENABLE_NEXUS_DEPOSIT: ${YIELD_CLAIM_ENABLE_NEXUS_DEPOSIT:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - /opt/areal-devnet/bots-data/yield-claim-crank:/data
+      # Share the merkle-publisher proof directory read-only — the publisher
+      # writes here, this bot reads. Host path mirrors PROOF_DIR=/data/proofs
+      # in the merkle-publisher service.
+      - /opt/areal-devnet/merkle-publisher-data/proofs:/proofs:ro
+
+  nexus-manager:
+    build:
+      context: ..
+      dockerfile: bots/nexus-manager/Dockerfile.devnet
+    container_name: areal-nexus-manager-devnet
+    restart: unless-stopped
+    environment:
+      NETWORK: ${NETWORK:-devnet}
+      RPC_URLS: ${RPC_URLS_DEVNET}
+      MANAGER_KEYPAIR_PATH: /data/keypair.json
+      LOCK_DIR: /data/locks
+      CHECKPOINT_DB: /data/nexus-manager.db
+      POLL_INTERVAL_SEC: ${POLL_INTERVAL_SEC:-300}
+      MIN_REBALANCE_USDC: ${MIN_REBALANCE_USDC:-1000000}
+      LP_TARGET_RATIO_BPS: ${LP_TARGET_RATIO_BPS:-5000}
+      LP_REBALANCE_TRIGGER_BPS: ${LP_REBALANCE_TRIGGER_BPS:-500}
+      MAX_POOL_CONCENTRATION_BPS: ${MAX_POOL_CONCENTRATION_BPS:-5000}
+      DEX_PROGRAM_ID: ${DEX_PROGRAM_ID}
+      USDC_MINT: ${USDC_MINT}
+      RWT_MINT: ${RWT_MINT}
+      NEXUS_MANAGED_POOLS: ${NEXUS_MANAGED_POOLS:-}
+      SEND_TX: ${SEND_TX:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - /opt/areal-devnet/bots-data/nexus-manager:/data
+
+  pool-rebalancer:
+    build:
+      context: ..
+      dockerfile: bots/pool-rebalancer/Dockerfile.devnet
+    container_name: areal-pool-rebalancer-devnet
+    restart: unless-stopped
+    environment:
+      RPC_URL: ${RPC_URL}
+      REBALANCER_KEYPAIR: /data/keypair.json
+      DEX_PROGRAM_ID: ${DEX_PROGRAM_ID}
+      RWT_ENGINE_PROGRAM_ID: ${RWT_ENGINE_PROGRAM_ID}
+    volumes:
+      - /opt/areal-devnet/bots-data/pool-rebalancer:/data
